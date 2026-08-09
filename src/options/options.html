@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SceneMarks Settings</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="settings-shell">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">SceneMarks</p>
+          <h1>Settings</h1>
+        </div>
+        <button id="openLibraryButton" type="button">Open Library</button>
+      </header>
+
+      <form id="settingsForm" class="settings-grid">
+        <section class="settings-section">
+          <h2>Capture</h2>
+          <label class="switch-row">
+            <input id="enableFloatingButton" type="checkbox">
+            <span>Enable draggable overlay panel</span>
+          </label>
+          <label class="switch-row">
+            <input id="quickSaveRequiresNote" type="checkbox">
+            <span>Quick save should ask for a note</span>
+          </label>
+          <label>
+            Duplicate detection window
+            <input id="duplicateThresholdSeconds" min="0" max="600" step="1" type="number">
+          </label>
+        </section>
+
+        <section class="settings-section">
+          <h2>Seeking</h2>
+          <label>
+            Default jump behavior
+            <select id="defaultJumpBehavior">
+              <option value="preserve-play-state">Preserve play state</option>
+              <option value="play-after-jump">Play after jump</option>
+              <option value="pause-after-jump">Pause after jump</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="settings-section">
+          <h2>Generic Pages</h2>
+          <label class="switch-row">
+            <input id="enableGenericSites" type="checkbox">
+            <span>Enable generic page support after popup activation</span>
+          </label>
+          <p class="hint">SceneMarks does not request all-site access. On unsupported pages, open the extension popup to inject the content script for that active tab.</p>
+        </section>
+
+        <section class="settings-section">
+          <h2>Page Hotkeys</h2>
+          <label class="switch-row">
+            <input id="enablePageHotkeys" type="checkbox">
+            <span>Enable customizable page hotkeys</span>
+          </label>
+
+          <div class="hotkey-row">
+            <label for="quickSaveHotkey">Quick save</label>
+            <input id="quickSaveHotkey" type="text" spellcheck="false">
+            <button type="button" data-record-hotkey="quickSaveHotkey">Record</button>
+          </div>
+
+          <div class="hotkey-row">
+            <label for="toggleRangeHotkey">Mark start/end</label>
+            <input id="toggleRangeHotkey" type="text" spellcheck="false">
+            <button type="button" data-record-hotkey="toggleRangeHotkey">Record</button>
+          </div>
+
+          <div class="hotkey-row">
+            <label for="openLibraryHotkey">Open library</label>
+            <input id="openLibraryHotkey" type="text" spellcheck="false">
+            <button type="button" data-record-hotkey="openLibraryHotkey">Record</button>
+          </div>
+
+          <p class="hint">These hotkeys work while a supported page is focused and can be changed here. Browser-level command shortcuts can also be changed from the Chromium extensions shortcuts page.</p>
+          <button id="openBrowserShortcutsButton" class="secondary-button" type="button">Open Browser Shortcut Settings</button>
+        </section>
+
+        <section class="settings-section danger-section">
+          <h2>Data</h2>
+          <p class="hint">Data stays in chrome.storage.local. Export from the library before clearing data.</p>
+          <button id="clearDataButton" class="danger-button" type="button">Clear All SceneMarks Data</button>
+        </section>
+
+        <footer class="form-footer">
+          <p id="statusMessage" role="status"></p>
+          <button type="submit">Save Settings</button>
+        </footer>
+      </form>
+    </main>
+
+    <script src="../shared/constants.js"></script>
+    <script src="../shared/time.js"></script>
+    <script src="../shared/ids.js"></script>
+    <script src="../shared/schema.js"></script>
+    <script src="../shared/storage.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SceneMarks Library</title>
+    <link rel="stylesheet" href="library.css">
+  </head>
+  <body>
+    <main class="library-shell">
+      <header class="library-header">
+        <div>
+          <p class="eyebrow">SceneMarks</p>
+          <h1>Library</h1>
+        </div>
+        <button id="openOptionsButton" type="button">Settings</button>
+      </header>
+
+      <section class="toolbar" aria-label="Library filters">
+        <label>
+          Search
+          <input id="searchInput" type="search" placeholder="Search title, note, or tag">
+        </label>
+        <label>
+          Platform
+          <select id="platformFilter"></select>
+        </label>
+        <label class="favorite-filter">
+          <input id="favoritesOnly" type="checkbox">
+          <span>Favorites only</span>
+        </label>
+        <div class="toolbar-actions" aria-label="Library expansion controls">
+          <button id="expandAllButton" type="button">Expand All</button>
+          <button id="collapseAllButton" type="button">Collapse All</button>
+        </div>
+      </section>
+
+      <section id="summaryBox" class="summary-box" role="status"></section>
+      <section id="libraryList" class="library-list"></section>
+
+      <footer class="library-footer">
+        <button id="exportButton" type="button">Export JSON</button>
+        <label class="import-button">
+          Import JSON
+          <input id="importInput" type="file" accept="application/json,.json">
+        </label>
+      </footer>
+    </main>
+
+    <script src="../shared/constants.js"></script>
+    <script src="../shared/time.js"></script>
+    <script src="../shared/ids.js"></script>
+    <script src="../shared/schema.js"></script>
+    <script src="../shared/storage.js"></script>
+    <script src="library.js"></script>
+  </body>
+</html>

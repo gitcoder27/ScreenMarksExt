@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SceneMarks</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="popup-header">
+        <div>
+          <h1>SceneMarks</h1>
+          <p id="platformLabel">Checking page...</p>
+        </div>
+        <button id="refreshButton" class="icon-button" type="button" title="Retry detection" aria-label="Retry detection">R</button>
+      </header>
+
+      <section id="statusBox" class="status-box" role="status"></section>
+
+      <section id="videoPanel" class="video-panel" hidden>
+        <dl class="meta-grid">
+          <div>
+            <dt>Current</dt>
+            <dd id="currentTimeLabel">--:--</dd>
+          </div>
+          <div>
+            <dt>Duration</dt>
+            <dd id="durationLabel">--:--</dd>
+          </div>
+        </dl>
+
+        <div class="primary-actions">
+          <button id="saveMomentButton" type="button">Save Moment</button>
+          <button id="rangeButton" type="button">Mark Scene Start</button>
+        </div>
+      </section>
+
+      <section class="scenes-section">
+        <div class="section-heading">
+          <h2>Saved Scenes</h2>
+          <span id="sceneCountLabel">0</span>
+        </div>
+        <div id="sceneList" class="scene-list"></div>
+      </section>
+
+      <footer class="popup-footer">
+        <button id="toggleOverlayButton" type="button">Overlay</button>
+        <button id="openLibraryButton" type="button">Library</button>
+        <button id="openOptionsButton" type="button">Settings</button>
+        <button id="hotkeysButton" type="button">Hotkeys</button>
+      </footer>
+    </main>
+
+    <dialog id="sceneDialog" class="scene-dialog">
+      <form method="dialog" id="sceneForm">
+        <h2 id="dialogTitle">Save Scene</h2>
+        <p id="dialogTime" class="dialog-time"></p>
+        <label>
+          Note
+          <textarea id="noteInput" rows="4" maxlength="1000"></textarea>
+        </label>
+        <label>
+          Tags
+          <input id="tagsInput" type="text" placeholder="funny, share">
+        </label>
+        <div class="dialog-actions">
+          <button id="cancelDialogButton" value="cancel" type="button">Cancel</button>
+          <button id="confirmDialogButton" value="default" type="submit">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="../shared/constants.js"></script>
+    <script src="../shared/time.js"></script>
+    <script src="../shared/ids.js"></script>
+    <script src="../shared/schema.js"></script>
+    <script src="../shared/storage.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

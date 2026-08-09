@@ -1,0 +1,75 @@
+{
+  "manifest_version": 3,
+  "name": "SceneMarks",
+  "version": "0.1.0",
+  "description": "Save and revisit local timestamp bookmarks for streaming videos.",
+  "permissions": ["storage", "activeTab", "scripting", "tabs"],
+  "host_permissions": [
+    "*://*.netflix.com/*",
+    "*://*.primevideo.com/*",
+    "*://*.amazon.com/*",
+    "*://*.amazon.in/*",
+    "*://*.hotstar.com/*",
+    "*://*.jiohotstar.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "SceneMarks"
+  },
+  "options_page": "src/options/options.html",
+  "commands": {
+    "quick-save-scene": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Quick save current video timestamp"
+    },
+    "mark-scene-range": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+M",
+        "mac": "Command+Shift+M"
+      },
+      "description": "Mark start or end of a scene range"
+    },
+    "open-library": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Open SceneMarks library"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.netflix.com/*",
+        "*://*.primevideo.com/*",
+        "*://*.amazon.com/*",
+        "*://*.amazon.in/*",
+        "*://*.hotstar.com/*",
+        "*://*.jiohotstar.com/*"
+      ],
+      "js": [
+        "src/shared/constants.js",
+        "src/shared/time.js",
+        "src/shared/ids.js",
+        "src/shared/schema.js",
+        "src/shared/storage.js",
+        "src/content/site-adapters/generic.js",
+        "src/content/site-adapters/netflix.js",
+        "src/content/site-adapters/prime-video.js",
+        "src/content/site-adapters/hotstar.js",
+        "src/content/site-adapters/index.js",
+        "src/content/video-detector.js",
+        "src/content/overlay.js",
+        "src/content/content-script.js"
+      ],
+      "css": ["src/content/overlay.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

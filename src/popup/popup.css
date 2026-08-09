@@ -1,0 +1,291 @@
+:root {
+  color-scheme: light;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  background: #f3f4f6;
+  color: #111827;
+  margin: 0;
+  min-width: 360px;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.popup-shell {
+  box-sizing: border-box;
+  padding: 14px;
+  width: 380px;
+}
+
+.popup-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+h2 {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#platformLabel {
+  color: #4b5563;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.icon-button {
+  background: #e5e7eb;
+  color: #111827;
+  height: 32px;
+  width: 32px;
+}
+
+.status-box {
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.4;
+  margin-bottom: 10px;
+  padding: 10px;
+}
+
+.status-box:empty {
+  display: none;
+}
+
+.status-box.is-error {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #9a3412;
+}
+
+.video-panel {
+  background: #111827;
+  border-radius: 8px;
+  color: #f9fafb;
+  margin-bottom: 12px;
+  padding: 12px;
+}
+
+.meta-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+  margin: 0 0 12px;
+}
+
+.meta-grid div {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  padding: 8px;
+}
+
+dt {
+  color: #cbd5e1;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+dd {
+  font-size: 19px;
+  font-weight: 800;
+  margin: 2px 0 0;
+}
+
+.primary-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.primary-actions button {
+  background: #f9fafb;
+  color: #111827;
+  padding: 9px 10px;
+}
+
+.primary-actions button:nth-child(2) {
+  background: #fde68a;
+}
+
+.section-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+#sceneCountLabel {
+  background: #e5e7eb;
+  border-radius: 999px;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 800;
+  min-width: 22px;
+  padding: 2px 6px;
+  text-align: center;
+}
+
+.scene-list {
+  display: grid;
+  gap: 8px;
+  max-height: 310px;
+  overflow: auto;
+}
+
+.empty-state {
+  color: #6b7280;
+  font-size: 13px;
+  padding: 12px 0;
+}
+
+.scene-row {
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.scene-row__top {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.scene-time {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.scene-note {
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.scene-tags {
+  color: #6b7280;
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.scene-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.scene-actions button,
+.popup-footer button,
+.dialog-actions button {
+  background: #e5e7eb;
+  color: #111827;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+.scene-actions button:first-child,
+.popup-footer button:first-child,
+.dialog-actions button:last-child {
+  background: #111827;
+  color: #f9fafb;
+}
+
+.popup-footer {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  margin-top: 12px;
+}
+
+#toggleOverlayButton[aria-pressed="true"] {
+  background: #fde68a;
+  color: #111827;
+}
+
+.scene-dialog {
+  border: 0;
+  border-radius: 10px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.32);
+  max-width: 330px;
+  padding: 0;
+  width: calc(100vw - 36px);
+}
+
+.scene-dialog::backdrop {
+  background: rgba(17, 24, 39, 0.46);
+}
+
+.scene-dialog form {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.dialog-time {
+  color: #4b5563;
+  font-size: 13px;
+}
+
+label {
+  color: #374151;
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 5px;
+}
+
+textarea,
+input {
+  border: 1px solid #d1d5db;
+  border-radius: 7px;
+  box-sizing: border-box;
+  color: #111827;
+  padding: 8px;
+  width: 100%;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
