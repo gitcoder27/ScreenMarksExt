@@ -14,7 +14,7 @@ It stores saved scenes locally in `chrome.storage.local`. It does not download v
 - Optional always-visible draggable overlay panel with Current and Library views.
 - Page-level customizable hotkeys from the extension settings page.
 - Browser command shortcuts for quick save, range toggle, and library.
-- Netflix, Prime Video, and Hotstar/JioHotstar identity adapters.
+- Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key on the next page load.)
 - Library page with search, filters, favorites, edit/delete, copy share text, export, import, and a Random pick button.
 - Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.
 - Minimal permissions: no `<all_urls>` host permission.
@@ -83,6 +83,7 @@ Default page hotkeys:
 - `Alt+Shift+D`: mark range end only.
 - `Alt+Shift+N`: jump to the next saved timestamp for the current video. Press repeatedly to rotate through all saved timestamps from the beginning.
 - `Alt+Shift+R`: open a random video from the library. Videos already open in a tab of the current window are never picked, so repeated jumps keep surfacing videos you have not opened yet. Query strings and tracking parameters are ignored when matching open tabs, so player URLs with different tracking noise still count as already open.
+- `Alt+Shift+O`: show or hide the overlay panel.
 - `Alt+Shift+L`: open library.
 
 To customize page hotkeys, open SceneMarks popup, click **Hotkeys**, then use the recorder fields in Settings. Single-key shortcuts are supported: click **Record** and press one key, for example just `S`, with no modifier. Press `Escape` while recording to cancel. Page hotkeys are ignored while you type in text fields.

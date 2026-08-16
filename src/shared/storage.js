@@ -273,6 +273,21 @@
 
       const nextScenes = video.scenes.filter((scene) => scene.id !== sceneId);
       deleted = nextScenes.length !== video.scenes.length;
+
+      if (deleted && nextScenes.length === 0) {
+        delete state.videos[videoKey];
+
+        if (state.activeRangeDraft && state.activeRangeDraft.videoKey === videoKey) {
+          state.activeRangeDraft = null;
+        }
+
+        if (state.pendingJump && state.pendingJump.videoKey === videoKey) {
+          state.pendingJump = null;
+        }
+
+        return state;
+      }
+
       video.scenes = nextScenes;
       video.updatedAt = new Date().toISOString();
       return state;
@@ -337,14 +352,22 @@
   }
 
   async function consumePendingJump(videoKey) {
+    // Read first: most calls have nothing to consume, and an unconditional
+    // write would broadcast a pointless storage.onChanged event that loops
+    // back into overlay refreshes (visible as overlay flicker).
+    const state = await getState();
+    if (!state.pendingJump || state.pendingJump.videoKey !== videoKey) {
+      return { ok: false };
+    }
+
     let pendingJump = null;
-    await updateState((state) => {
-      if (state.pendingJump && state.pendingJump.videoKey === videoKey) {
-        pendingJump = state.pendingJump;
-        state.pendingJump = null;
+    await updateState((draftState) => {
+      if (draftState.pendingJump && draftState.pendingJump.videoKey === videoKey) {
+        pendingJump = draftState.pendingJump;
+        draftState.pendingJump = null;
       }
 
-      return state;
+      return draftState;
     });
 
     return pendingJump ? { ok: true, pendingJump } : { ok: false };

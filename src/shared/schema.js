@@ -11,7 +11,7 @@
   } = SceneMarks.Constants;
   const { isValidSeconds, normalizeSeconds } = SceneMarks.Time;
 
-  const VALID_PLATFORMS = new Set(["netflix", "prime", "hotstar", "generic", "unknown"]);
+  const VALID_PLATFORMS = new Set(["netflix", "prime", "hotstar", "youtube", "generic", "unknown"]);
   const VALID_JUMP_BEHAVIORS = new Set([
     "preserve-play-state",
     "play-after-jump",
@@ -75,6 +75,7 @@
       endRange: sanitizeText(hotkeys.endRange || defaults.endRange, 60),
       nextScene: sanitizeText(hotkeys.nextScene || defaults.nextScene, 60),
       randomVideo: sanitizeText(hotkeys.randomVideo || defaults.randomVideo, 60),
+      toggleOverlay: sanitizeText(hotkeys.toggleOverlay || defaults.toggleOverlay, 60),
       openLibrary: sanitizeText(hotkeys.openLibrary || defaults.openLibrary, 60)
     };
   }

@@ -23,6 +23,7 @@
       "endRangeHotkey",
       "nextSceneHotkey",
       "randomVideoHotkey",
+      "toggleOverlayHotkey",
       "openLibraryHotkey",
       "openBrowserShortcutsButton",
       "clearDataButton",
@@ -78,6 +79,7 @@
     elements.endRangeHotkey.value = settings.hotkeys.endRange;
     elements.nextSceneHotkey.value = settings.hotkeys.nextScene;
     elements.randomVideoHotkey.value = settings.hotkeys.randomVideo;
+    elements.toggleOverlayHotkey.value = settings.hotkeys.toggleOverlay;
     elements.openLibraryHotkey.value = settings.hotkeys.openLibrary;
   }
 
@@ -97,6 +99,7 @@
         endRange: elements.endRangeHotkey.value,
         nextScene: elements.nextSceneHotkey.value,
         randomVideo: elements.randomVideoHotkey.value,
+        toggleOverlay: elements.toggleOverlayHotkey.value,
         openLibrary: elements.openLibraryHotkey.value
       }
     });

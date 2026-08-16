@@ -16,7 +16,9 @@ const CONTENT_SCRIPT_FILES = [
   "src/content/site-adapters/netflix.js",
   "src/content/site-adapters/prime-video.js",
   "src/content/site-adapters/hotstar.js",
+  "src/content/site-adapters/youtube.js",
   "src/content/site-adapters/index.js",
+  "src/shared/migrations.js",
   "src/content/video-detector.js",
   "src/content/overlay.js",
   "src/content/content-script.js"

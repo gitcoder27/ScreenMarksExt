@@ -126,34 +126,50 @@
     let activeVideo = null;
     let observer = null;
     let scanTimer = null;
+    let lastNotifiedSignature = null;
     const mediaEvents = ["loadedmetadata", "timeupdate", "play", "pause", "durationchange"];
 
+    function snapshotSignature(snapshot) {
+      return `${snapshot.detected}|${snapshot.videoKey}`;
+    }
+
+    // Fires only when the video identity actually changes. Events like
+    // timeupdate re-fire constantly while playing; notifying on each of them
+    // would flood consumers and make scheduled refreshes starve.
     function notify() {
-      if (typeof onContextChange === "function") {
-        onContextChange(createSnapshot(activeVideo));
+      if (typeof onContextChange !== "function") {
+        return;
       }
+
+      const snapshot = createSnapshot(activeVideo);
+      const signature = snapshotSignature(snapshot);
+      if (signature === lastNotifiedSignature) {
+        return;
+      }
+
+      lastNotifiedSignature = signature;
+      onContextChange(snapshot);
     }
 
     function bindVideo(video) {
-      if (activeVideo === video) {
-        return;
+      if (activeVideo !== video) {
+        if (activeVideo) {
+          mediaEvents.forEach((eventName) => {
+            activeVideo.removeEventListener(eventName, notify);
+          });
+        }
+
+        activeVideo = video;
+        if (video) {
+          mediaEvents.forEach((eventName) => {
+            video.addEventListener(eventName, notify, { passive: true });
+          });
+        }
       }
 
-      if (activeVideo) {
-        mediaEvents.forEach((eventName) => {
-          activeVideo.removeEventListener(eventName, notify);
-        });
-      }
-
-      activeVideo = video;
-      if (!video) {
-        notify();
-        return;
-      }
-
-      mediaEvents.forEach((eventName) => {
-        video.addEventListener(eventName, notify, { passive: true });
-      });
+      // Always notify: single-page apps (e.g. YouTube) reuse the same <video>
+      // element across navigations, so the element may not change even when
+      // the identity did. The signature filter drops no-op notifications.
       notify();
     }
 
@@ -221,6 +237,8 @@
         });
       }
       root.removeEventListener("resize", scheduleScan);
+      activeVideo = null;
+      lastNotifiedSignature = null;
     }
 
     return {

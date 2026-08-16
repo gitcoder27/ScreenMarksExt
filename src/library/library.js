@@ -93,9 +93,18 @@
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
+  let lastPlatformSignature = null;
+
   function renderPlatformOptions() {
     const selected = elements.platformFilter.value || "all";
     const platforms = Array.from(new Set(Object.values(state.videos).map((video) => video.platform))).sort();
+    const signature = platforms.join("|");
+
+    if (signature === lastPlatformSignature) {
+      return;
+    }
+
+    lastPlatformSignature = signature;
     clearNode(elements.platformFilter);
 
     const allOption = document.createElement("option");
@@ -376,7 +385,7 @@
     anchor.href = url;
     anchor.download = `scenemarks-export-${new Date().toISOString().slice(0, 10)}.json`;
     anchor.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   async function importData(file) {
@@ -399,6 +408,14 @@
   async function loadState() {
     state = await Storage.getState();
     render();
+  }
+
+  function installStorageSync() {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === "local" && changes.scenemarksState) {
+        loadState();
+      }
+    });
   }
 
   function bindElements() {
@@ -435,6 +452,7 @@
   document.addEventListener("DOMContentLoaded", async () => {
     bindElements();
     bindEvents();
+    installStorageSync();
     await loadState();
   });
 })();

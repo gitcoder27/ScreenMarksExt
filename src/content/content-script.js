@@ -2,7 +2,8 @@
   if (root.__SceneMarksContentLoaded) {
     return;
   }
-  root.__SceneMarksContentLoaded = true;
+  const CONTEXT_TOKEN = `${Date.now()}-${Math.random()}`;
+  root.__SceneMarksContentLoaded = CONTEXT_TOKEN;
 
   const SceneMarks = root.SceneMarks;
   const { MESSAGE_TYPES } = SceneMarks.Constants;
@@ -12,6 +13,76 @@
   let overlay = null;
   let overlayRefreshTimer = null;
   let pendingJumpTimer = null;
+  let contextDead = false;
+  let hotkeyListener = null;
+
+  function isContextDead() {
+    if (contextDead) {
+      return true;
+    }
+
+    try {
+      // chrome.runtime.id becomes undefined once the context is invalidated
+      // (extension reload/update). Accessing it does not throw; checking it
+      // is the canonical probe for a dead content-script context.
+      return !chrome.runtime.id;
+    } catch (_error) {
+      return true;
+    }
+  }
+
+  function tearDownDeadContext() {
+    if (contextDead) {
+      return;
+    }
+
+    contextDead = true;
+    root.clearTimeout(overlayRefreshTimer);
+    root.clearTimeout(pendingJumpTimer);
+    detector.stop();
+
+    if (hotkeyListener) {
+      root.removeEventListener("keydown", hotkeyListener, true);
+      hotkeyListener = null;
+    }
+
+    if (overlay) {
+      overlay.destroy();
+      overlay = null;
+    }
+
+    // Let a later injected copy (after extension reload) take over, but do not
+    // clobber a replacement script that has already been injected.
+    if (root.__SceneMarksContentLoaded === CONTEXT_TOKEN) {
+      root.__SceneMarksContentLoaded = false;
+    }
+  }
+
+  function isInvalidContextError(error) {
+    return error && /Extension context invalidated/i.test(String(error.message || error));
+  }
+
+  // Converts an async entry point into one that silently tears down on a dead
+  // extension context instead of producing uncaught promise rejections.
+  function guard(fn) {
+    return (...args) => {
+      if (isContextDead()) {
+        tearDownDeadContext();
+        return { ok: false, error: "SceneMarks was reloaded. Refresh the page to reactivate it." };
+      }
+
+      return Promise.resolve()
+        .then(() => fn(...args))
+        .catch((error) => {
+          if (isInvalidContextError(error)) {
+            tearDownDeadContext();
+            return { ok: false, error: "SceneMarks was reloaded. Refresh the page to reactivate it." };
+          }
+
+          throw error;
+        });
+    };
+  }
 
   const detector = SceneMarks.VideoDetector.createVideoDetector({
     onContextChange: () => {
@@ -325,9 +396,20 @@
 
   function installMessageListener() {
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (isContextDead()) {
+        return false;
+      }
+
       handleMessage(message)
         .then(sendResponse)
-        .catch((error) => sendResponse(errorResponse(error)));
+        .catch((error) => {
+          if (isInvalidContextError(error)) {
+            tearDownDeadContext();
+            return;
+          }
+
+          sendResponse(errorResponse(error));
+        });
       return true;
     });
   }
@@ -366,8 +448,24 @@
     return response || { ok: false, error: "Could not open a random video." };
   }
 
+  async function toggleOverlayVisibility() {
+    const enabled = !getSettingsSync().enableFloatingButton;
+    settings = await Storage.updateSettings({ enableFloatingButton: enabled });
+
+    if (overlay) {
+      overlay.setEnabled(enabled);
+    }
+
+    return { ok: true, message: enabled ? "Overlay shown." : "Overlay hidden." };
+  }
+
   function installPageHotkeys() {
-    root.addEventListener("keydown", async (event) => {
+    hotkeyListener = async (event) => {
+      if (isContextDead()) {
+        tearDownDeadContext();
+        return;
+      }
+
       const currentSettings = getSettingsSync();
       if (!currentSettings.enablePageHotkeys || event.repeat || isTextInputTarget(event.target)) {
         return;
@@ -388,6 +486,8 @@
         action = jumpToNextScene;
       } else if (shortcutMatches(event, hotkeys.randomVideo)) {
         action = openRandomVideoFromLibrary;
+      } else if (shortcutMatches(event, hotkeys.toggleOverlay)) {
+        action = toggleOverlayVisibility;
       } else if (shortcutMatches(event, hotkeys.openLibrary)) {
         action = openLibrary;
       }
@@ -397,7 +497,16 @@
       }
 
       event.preventDefault();
-      const result = await action();
+      let result;
+      try {
+        result = await action();
+      } catch (error) {
+        if (isInvalidContextError(error)) {
+          tearDownDeadContext();
+        }
+        return;
+      }
+
       if (overlay && result && result.error) {
         overlay.showToast(result.error);
       } else if (overlay && result && result.message) {
@@ -405,19 +514,27 @@
       } else if (overlay && result && result.ok) {
         overlay.showToast("SceneMarks action complete.");
       }
-    }, true);
+    };
+
+    root.addEventListener("keydown", hotkeyListener, true);
   }
 
   function installStorageListener() {
     chrome.storage.onChanged.addListener(async (changes, areaName) => {
-      if (areaName !== "local" || !changes.scenemarksState) {
+      if (isContextDead() || areaName !== "local" || !changes.scenemarksState) {
         return;
       }
 
-      await loadSettings();
-      if (overlay) {
-        overlay.setEnabled(getSettingsSync().enableFloatingButton);
-        scheduleOverlayRefresh(100);
+      try {
+        await loadSettings();
+        if (overlay) {
+          overlay.setEnabled(getSettingsSync().enableFloatingButton);
+          scheduleOverlayRefresh(100);
+        }
+      } catch (error) {
+        if (isInvalidContextError(error)) {
+          tearDownDeadContext();
+        }
       }
     });
   }
@@ -425,16 +542,31 @@
   function scheduleOverlayRefresh(delayMs) {
     root.clearTimeout(overlayRefreshTimer);
     overlayRefreshTimer = root.setTimeout(() => {
-      if (overlay) {
-        overlay.refresh();
+      if (!overlay || isContextDead()) {
+        return;
       }
+
+      overlay.refresh().catch((error) => {
+        if (isInvalidContextError(error)) {
+          tearDownDeadContext();
+        }
+      });
     }, Number.isFinite(delayMs) ? delayMs : 250);
   }
 
   function schedulePendingJumpCheck(delayMs) {
     root.clearTimeout(pendingJumpTimer);
     pendingJumpTimer = root.setTimeout(() => {
+      if (isContextDead()) {
+        return;
+      }
+
       attemptPendingJump().catch((error) => {
+        if (isInvalidContextError(error)) {
+          tearDownDeadContext();
+          return;
+        }
+
         if (overlay) {
           overlay.showToast(error.message || "Could not complete queued jump.");
         }
@@ -443,6 +575,10 @@
   }
 
   async function attemptPendingJump() {
+    if (isContextDead()) {
+      return;
+    }
+
     const snapshot = getCurrentSnapshot();
     if (!snapshot.detected || !snapshot.videoKey) {
       return;
@@ -464,19 +600,26 @@
   }
 
   async function initOverlay() {
+    // An orphaned copy of this script (from before an extension reload) may
+    // still have its overlay mounted; remove it before creating ours.
+    document.querySelectorAll(".scenemarks-overlay").forEach((staleHost) => staleHost.remove());
+
     overlay = SceneMarks.Overlay.createOverlay({
-      getState: getContextResponse,
-      quickSave: () => saveTimestamp({ quick: true }),
-      toggleRange: () => toggleRange({ quick: true }),
-      seekTo: (seconds) => seekTo({ seconds }),
-      deleteScene: (payload) => deleteScene(payload),
-      openVideoAtScene
+      getState: guard(getContextResponse),
+      quickSave: guard(() => saveTimestamp({ quick: true })),
+      toggleRange: guard(() => toggleRange({ quick: true })),
+      seekTo: guard((seconds) => seekTo({ seconds })),
+      deleteScene: guard((payload) => deleteScene(payload)),
+      openVideoAtScene: guard(openVideoAtScene)
     });
     overlay.setEnabled(getSettingsSync().enableFloatingButton);
   }
 
   async function init() {
     installMessageListener();
+    if (SceneMarks.Migrations && SceneMarks.Migrations.migrateLegacyGenericVideos) {
+      await SceneMarks.Migrations.migrateLegacyGenericVideos();
+    }
     await loadSettings();
     detector.start();
     installUrlWatcher();
@@ -487,6 +630,11 @@
   }
 
   init().catch((error) => {
+    if (isInvalidContextError(error)) {
+      tearDownDeadContext();
+      return;
+    }
+
     console.warn("SceneMarks initialization failed:", error);
   });
 })(globalThis);

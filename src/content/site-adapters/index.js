@@ -5,6 +5,7 @@
     Adapters.NetflixAdapter,
     Adapters.PrimeVideoAdapter,
     Adapters.HotstarAdapter,
+    Adapters.YouTubeAdapter,
     Adapters.GenericAdapter
   ].filter(Boolean);
 

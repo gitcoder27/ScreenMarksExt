@@ -137,6 +137,11 @@
       }
     }
 
+    function destroy() {
+      root.clearTimeout(toastTimer);
+      host.remove();
+    }
+
     async function refresh() {
       if (host.hidden) {
         return;
@@ -384,6 +389,7 @@
     setViewMode("current");
 
     return {
+      destroy,
       refresh,
       render,
       setEnabled,

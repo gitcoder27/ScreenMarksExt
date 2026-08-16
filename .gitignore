@@ -14,3 +14,7 @@ build/
 # Env / secrets
 .env
 .env.*
+
+# Local tooling config
+.ocx/
+.opencode/

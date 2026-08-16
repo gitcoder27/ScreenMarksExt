@@ -23,6 +23,7 @@
       endRange: "Alt+Shift+D",
       nextScene: "Alt+Shift+N",
       randomVideo: "Alt+Shift+R",
+      toggleOverlay: "Alt+Shift+O",
       openLibrary: "Alt+Shift+L"
     })
   });

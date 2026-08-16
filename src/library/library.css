@@ -248,6 +248,11 @@ select {
   display: grid;
 }
 
+/* .scene-table's display:grid overrides the [hidden] UA rule, so collapse is driven by the class instead. */
+.video-card.is-collapsed .scene-table {
+  display: none;
+}
+
 .scene-row {
   align-items: start;
   border-bottom: 1px solid #334155;
