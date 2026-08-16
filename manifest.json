@@ -1,17 +1,10 @@
 {
   "manifest_version": 3,
   "name": "SceneMarks",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "Save and revisit local timestamp bookmarks for streaming videos.",
   "permissions": ["storage", "activeTab", "scripting", "tabs"],
-  "host_permissions": [
-    "*://*.netflix.com/*",
-    "*://*.primevideo.com/*",
-    "*://*.amazon.com/*",
-    "*://*.amazon.in/*",
-    "*://*.hotstar.com/*",
-    "*://*.jiohotstar.com/*"
-  ],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/background/service-worker.js"
   },
@@ -45,14 +38,7 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "*://*.netflix.com/*",
-        "*://*.primevideo.com/*",
-        "*://*.amazon.com/*",
-        "*://*.amazon.in/*",
-        "*://*.hotstar.com/*",
-        "*://*.jiohotstar.com/*"
-      ],
+      "matches": ["<all_urls>"],
       "js": [
         "src/shared/constants.js",
         "src/shared/time.js",
@@ -69,7 +55,7 @@
         "src/content/content-script.js"
       ],
       "css": ["src/content/overlay.css"],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ]
 }

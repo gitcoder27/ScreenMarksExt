@@ -1,11 +1,11 @@
 :root {
-  color-scheme: light;
+  color-scheme: dark;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 body {
-  background: #f3f4f6;
-  color: #111827;
+  background: #0f172a;
+  color: #e2e8f0;
   margin: 0;
   min-width: 360px;
 }
@@ -26,7 +26,7 @@ button {
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-  outline: 3px solid #2563eb;
+  outline: 3px solid #60a5fa;
   outline-offset: 2px;
 }
 
@@ -61,23 +61,23 @@ h2 {
 }
 
 #platformLabel {
-  color: #4b5563;
+  color: #94a3b8;
   font-size: 12px;
   margin-top: 2px;
 }
 
 .icon-button {
-  background: #e5e7eb;
-  color: #111827;
+  background: #334155;
+  color: #e2e8f0;
   height: 32px;
   width: 32px;
 }
 
 .status-box {
-  background: #ffffff;
-  border: 1px solid #d1d5db;
+  background: #1e293b;
+  border: 1px solid #334155;
   border-radius: 8px;
-  color: #374151;
+  color: #cbd5e1;
   font-size: 13px;
   line-height: 1.4;
   margin-bottom: 10px;
@@ -89,13 +89,14 @@ h2 {
 }
 
 .status-box.is-error {
-  background: #fff7ed;
-  border-color: #fed7aa;
-  color: #9a3412;
+  background: rgba(153, 27, 27, 0.25);
+  border-color: #7f1d1d;
+  color: #fca5a5;
 }
 
 .video-panel {
-  background: #111827;
+  background: #1e293b;
+  border: 1px solid #334155;
   border-radius: 8px;
   color: #f9fafb;
   margin-bottom: 12px;
@@ -110,13 +111,13 @@ h2 {
 }
 
 .meta-grid div {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
   border-radius: 7px;
   padding: 8px;
 }
 
 dt {
-  color: #cbd5e1;
+  color: #94a3b8;
   font-size: 11px;
   text-transform: uppercase;
 }
@@ -134,13 +135,13 @@ dd {
 }
 
 .primary-actions button {
-  background: #f9fafb;
-  color: #111827;
+  background: #f1f5f9;
+  color: #0f172a;
   padding: 9px 10px;
 }
 
 .primary-actions button:nth-child(2) {
-  background: #fde68a;
+  background: #facc15;
 }
 
 .section-heading {
@@ -151,9 +152,9 @@ dd {
 }
 
 #sceneCountLabel {
-  background: #e5e7eb;
+  background: #334155;
   border-radius: 999px;
-  color: #374151;
+  color: #e2e8f0;
   font-size: 12px;
   font-weight: 800;
   min-width: 22px;
@@ -169,14 +170,14 @@ dd {
 }
 
 .empty-state {
-  color: #6b7280;
+  color: #94a3b8;
   font-size: 13px;
   padding: 12px 0;
 }
 
 .scene-row {
-  background: #ffffff;
-  border: 1px solid #d1d5db;
+  background: #1e293b;
+  border: 1px solid #334155;
   border-radius: 8px;
   padding: 9px;
 }
@@ -189,21 +190,21 @@ dd {
 }
 
 .scene-time {
-  color: #111827;
+  color: #f1f5f9;
   font-size: 13px;
   font-weight: 900;
   white-space: nowrap;
 }
 
 .scene-note {
-  color: #374151;
+  color: #cbd5e1;
   font-size: 13px;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
 .scene-tags {
-  color: #6b7280;
+  color: #94a3b8;
   font-size: 11px;
   margin-top: 3px;
 }
@@ -217,8 +218,8 @@ dd {
 .scene-actions button,
 .popup-footer button,
 .dialog-actions button {
-  background: #e5e7eb;
-  color: #111827;
+  background: #334155;
+  color: #e2e8f0;
   font-size: 12px;
   padding: 6px 8px;
 }
@@ -226,8 +227,8 @@ dd {
 .scene-actions button:first-child,
 .popup-footer button:first-child,
 .dialog-actions button:last-child {
-  background: #111827;
-  color: #f9fafb;
+  background: #facc15;
+  color: #111827;
 }
 
 .popup-footer {
@@ -238,21 +239,23 @@ dd {
 }
 
 #toggleOverlayButton[aria-pressed="true"] {
-  background: #fde68a;
+  background: #facc15;
   color: #111827;
 }
 
 .scene-dialog {
-  border: 0;
+  background: #1e293b;
+  border: 1px solid #334155;
   border-radius: 10px;
-  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.32);
+  box-shadow: 0 24px 70px rgba(2, 6, 23, 0.6);
+  color: #e2e8f0;
   max-width: 330px;
   padding: 0;
   width: calc(100vw - 36px);
 }
 
 .scene-dialog::backdrop {
-  background: rgba(17, 24, 39, 0.46);
+  background: rgba(2, 6, 23, 0.62);
 }
 
 .scene-dialog form {
@@ -262,12 +265,12 @@ dd {
 }
 
 .dialog-time {
-  color: #4b5563;
+  color: #94a3b8;
   font-size: 13px;
 }
 
 label {
-  color: #374151;
+  color: #cbd5e1;
   display: grid;
   font-size: 12px;
   font-weight: 800;
@@ -276,10 +279,11 @@ label {
 
 textarea,
 input {
-  border: 1px solid #d1d5db;
+  background: #0f172a;
+  border: 1px solid #334155;
   border-radius: 7px;
   box-sizing: border-box;
-  color: #111827;
+  color: #e2e8f0;
   padding: 8px;
   width: 100%;
 }

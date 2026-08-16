@@ -2,7 +2,8 @@
   all: initial;
   bottom: 22px;
   box-sizing: border-box;
-  color: #111827;
+  color: #e2e8f0;
+  color-scheme: dark;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   position: fixed;
   right: 22px;
@@ -87,7 +88,8 @@
 .scenemarks-overlay__icon,
 .scenemarks-overlay__primary,
 .scenemarks-overlay__secondary,
-.scenemarks-overlay__jump {
+.scenemarks-overlay__jump,
+.scenemarks-overlay__delete {
   all: initial;
   border-radius: 7px;
   cursor: pointer;
@@ -109,11 +111,11 @@
 }
 
 .scenemarks-overlay__body {
-  background: rgba(248, 250, 252, 0.98);
-  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: rgba(15, 23, 42, 0.97);
+  border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 0 0 10px 10px;
   border-top: 0;
-  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.22);
+  box-shadow: 0 18px 44px rgba(2, 6, 23, 0.55);
   display: grid;
   gap: 8px;
   padding: 10px;
@@ -124,7 +126,7 @@
 }
 
 .scenemarks-overlay__tabs {
-  background: #e5e7eb;
+  background: #1e293b;
   border-radius: 8px;
   display: grid;
   gap: 3px;
@@ -136,7 +138,7 @@
   all: initial;
   align-items: center;
   border-radius: 6px;
-  color: #475569;
+  color: #94a3b8;
   cursor: pointer;
   display: inline-flex;
   font-family: inherit;
@@ -149,9 +151,9 @@
 }
 
 .scenemarks-overlay__tab.is-active {
-  background: #ffffff;
-  color: #0f172a;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+  background: #334155;
+  color: #f1f5f9;
+  box-shadow: 0 1px 3px rgba(2, 6, 23, 0.4);
 }
 
 .scenemarks-overlay__panel {
@@ -164,7 +166,7 @@
 }
 
 .scenemarks-overlay__status {
-  color: #475569;
+  color: #94a3b8;
   font-size: 12px;
   line-height: 1.3;
 }
@@ -183,13 +185,13 @@
 }
 
 .scenemarks-overlay__primary {
-  background: #111827;
-  color: #f8fafc;
+  background: #facc15;
+  color: #111827;
 }
 
 .scenemarks-overlay__secondary {
-  background: #fde68a;
-  color: #111827;
+  background: #334155;
+  color: #e2e8f0;
 }
 
 .scenemarks-overlay__primary:disabled,
@@ -209,16 +211,20 @@
 
 .scenemarks-overlay__search {
   all: initial;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
+  background: #0f172a;
+  border: 1px solid #334155;
   border-radius: 8px;
-  color: #111827;
+  color: #e2e8f0;
   display: block;
   font-family: inherit;
   font-size: 12px;
   line-height: 1.2;
   padding: 9px 10px;
   width: 100%;
+}
+
+.scenemarks-overlay__search::placeholder {
+  color: #64748b;
 }
 
 .scenemarks-overlay__library-controls {
@@ -230,9 +236,9 @@
 .scenemarks-overlay__mini-action {
   all: initial;
   align-items: center;
-  background: #e5e7eb;
+  background: #334155;
   border-radius: 7px;
-  color: #111827;
+  color: #e2e8f0;
   cursor: pointer;
   display: inline-flex;
   font-family: inherit;
@@ -246,7 +252,7 @@
 
 .scenemarks-overlay__empty,
 .scenemarks-overlay__more {
-  color: #64748b;
+  color: #94a3b8;
   font-size: 12px;
   line-height: 1.35;
   padding: 5px 0;
@@ -254,8 +260,8 @@
 
 .scenemarks-overlay__scene {
   align-items: center;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: #1e293b;
+  border: 1px solid #334155;
   border-radius: 8px;
   display: grid;
   gap: 8px;
@@ -265,8 +271,8 @@
 
 .scenemarks-overlay__video {
   all: initial;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: #1e293b;
+  border: 1px solid #334155;
   border-radius: 8px;
   display: grid;
   font-family: inherit;
@@ -277,7 +283,7 @@
 .scenemarks-overlay__video-header {
   all: initial;
   align-items: center;
-  color: #0f172a;
+  color: #f1f5f9;
   cursor: pointer;
   display: grid;
   font-family: inherit;
@@ -300,9 +306,9 @@
 .scenemarks-overlay__video-caret {
   all: initial;
   align-items: center;
-  background: #e5e7eb;
+  background: #334155;
   border-radius: 999px;
-  color: #111827;
+  color: #e2e8f0;
   display: inline-flex;
   font-family: inherit;
   font-size: 12px;
@@ -314,15 +320,15 @@
 }
 
 .scenemarks-overlay__video-title {
-  color: #0f172a;
+  color: #f1f5f9;
   font-size: 12px;
   font-weight: 900;
 }
 
 .scenemarks-overlay__video-meta {
-  background: #f3f4f6;
+  background: rgba(148, 163, 184, 0.14);
   border-radius: 999px;
-  color: #64748b;
+  color: #94a3b8;
   font-size: 11px;
   font-weight: 900;
   padding: 3px 7px;
@@ -354,39 +360,63 @@
 }
 
 .scenemarks-overlay__scene-time {
-  color: #0f172a;
+  color: #f1f5f9;
   font-size: 12px;
   font-weight: 900;
 }
 
 .scenemarks-overlay__scene-note {
-  color: #64748b;
+  color: #94a3b8;
   font-size: 11px;
+}
+
+.scenemarks-overlay__scene-actions {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
 }
 
 .scenemarks-overlay__jump {
   align-items: center;
-  background: #e5e7eb;
-  color: #111827;
+  background: #334155;
+  color: #e2e8f0;
   font-size: 11px;
-  padding: 7px 8px;
+  padding: 6px 8px;
+}
+
+.scenemarks-overlay__delete {
+  align-items: center;
+  background: transparent;
+  border-radius: 6px;
+  color: #64748b;
+  font-size: 14px;
+  height: 24px;
+  padding: 0;
+  width: 24px;
+}
+
+.scenemarks-overlay__delete:hover {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
 }
 
 .scenemarks-overlay__icon:focus-visible,
 .scenemarks-overlay__primary:focus-visible,
 .scenemarks-overlay__secondary:focus-visible,
 .scenemarks-overlay__jump:focus-visible,
+.scenemarks-overlay__delete:focus-visible,
 .scenemarks-overlay__tab:focus-visible,
 .scenemarks-overlay__search:focus-visible,
 .scenemarks-overlay__mini-action:focus-visible,
 .scenemarks-overlay__video-header:focus-visible {
-  outline: 3px solid #2563eb;
+  outline: 3px solid #60a5fa;
   outline-offset: 2px;
 }
 
 .scenemarks-overlay__toast {
   all: initial;
-  background: rgba(15, 23, 42, 0.95);
+  background: rgba(2, 6, 23, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 8px;
   bottom: calc(100% + 8px);
   box-sizing: border-box;

@@ -15,7 +15,8 @@ It stores saved scenes locally in `chrome.storage.local`. It does not download v
 - Page-level customizable hotkeys from the extension settings page.
 - Browser command shortcuts for quick save, range toggle, and library.
 - Netflix, Prime Video, and Hotstar/JioHotstar identity adapters.
-- Library page with search, filters, favorites, edit/delete, copy share text, export, and import.
+- Library page with search, filters, favorites, edit/delete, copy share text, export, import, and a Random pick button.
+- Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.
 - Minimal permissions: no `<all_urls>` host permission.
 
 ## Install In Brave
@@ -41,7 +42,7 @@ The same flow works in Chrome at `chrome://extensions`.
 6. Click **Jump** beside any saved scene to seek back to it.
 7. Use **Overlay On/Off** in the popup to show or hide the draggable page overlay.
 8. Use the overlay **Library** view to search saved videos without leaving the current page.
-9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite scenes, or open source pages.
+9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick and highlight a random video from the list when you have nothing specific in mind.
 
 ## Overlay Panel
 
@@ -56,9 +57,10 @@ From the overlay you can:
 - Expand a video title to reveal its saved scenes, or use **Expand All** / **Collapse All** to scan faster.
 - Click **Jump** for the current video to seek immediately.
 - Click **Jump** for another saved video to open that video page and queue the timestamp jump.
+- Click the **x** button beside a scene to delete it.
 - Collapse the panel if you only want a small header.
 
-Queued timestamp jumps are stored briefly while the target page opens. Once SceneMarks detects the matching video page, it seeks to the selected timestamp and clears the queued jump. This works best on supported hosts where SceneMarks has content-script access. Generic pages may still require opening the popup on the target page because SceneMarks avoids broad `<all_urls>` permission.
+Queued timestamp jumps are stored briefly while the target page opens. Once SceneMarks detects the matching video page, it seeks to the selected timestamp and clears the queued jump. SceneMarks content scripts load on all pages (`<all_urls>`), so the overlay and queued jumps work on both supported streaming hosts and generic HTML5 video pages without opening the popup first.
 
 ## Hotkeys
 
@@ -76,10 +78,16 @@ Default browser command shortcuts:
 Default page hotkeys:
 
 - `Alt+Shift+S`: quick save current timestamp.
-- `Alt+Shift+M`: mark range start/end.
+- `Alt+Shift+M`: mark range start/end (toggle).
+- `Alt+Shift+A`: mark range start only.
+- `Alt+Shift+D`: mark range end only.
+- `Alt+Shift+N`: jump to the next saved timestamp for the current video. Press repeatedly to rotate through all saved timestamps from the beginning.
+- `Alt+Shift+R`: open a random video from the library. Videos already open in a tab of the current window are never picked, so repeated jumps keep surfacing videos you have not opened yet. Query strings and tracking parameters are ignored when matching open tabs, so player URLs with different tracking noise still count as already open.
 - `Alt+Shift+L`: open library.
 
-To customize page hotkeys, open SceneMarks popup, click **Hotkeys**, then use the recorder fields in Settings.
+To customize page hotkeys, open SceneMarks popup, click **Hotkeys**, then use the recorder fields in Settings. Single-key shortcuts are supported: click **Record** and press one key, for example just `S`, with no modifier. Press `Escape` while recording to cancel. Page hotkeys are ignored while you type in text fields.
+
+Page hotkeys are registered at `document_start`, before the site's own scripts run, so streaming players cannot swallow single-key presses before SceneMarks sees them. After changing hotkeys, reload the video tab so the updated content script picks them up.
 
 To customize browser command shortcuts, open `brave://extensions/shortcuts` or `chrome://extensions/shortcuts`.
 

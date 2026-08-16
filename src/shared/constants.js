@@ -19,6 +19,10 @@
     hotkeys: Object.freeze({
       quickSave: "Alt+Shift+S",
       toggleRange: "Alt+Shift+M",
+      startRange: "Alt+Shift+A",
+      endRange: "Alt+Shift+D",
+      nextScene: "Alt+Shift+N",
+      randomVideo: "Alt+Shift+R",
       openLibrary: "Alt+Shift+L"
     })
   });
@@ -36,6 +40,7 @@
     UPDATE_SCENE: "SCENEMARKS_UPDATE_SCENE",
     OPEN_LIBRARY: "SCENEMARKS_OPEN_LIBRARY",
     OPEN_VIDEO_URL: "SCENEMARKS_OPEN_VIDEO_URL",
+    OPEN_RANDOM_VIDEO: "SCENEMARKS_OPEN_RANDOM_VIDEO",
     GET_ACTIVE_TAB_CONTEXT: "SCENEMARKS_GET_ACTIVE_TAB_CONTEXT",
     FORWARD_TO_ACTIVE_TAB: "SCENEMARKS_FORWARD_TO_ACTIVE_TAB"
   });

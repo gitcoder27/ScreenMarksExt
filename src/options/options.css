@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light;
+  color-scheme: dark;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -8,8 +8,8 @@
 }
 
 body {
-  background: #eef2f7;
-  color: #111827;
+  background: #0f172a;
+  color: #e2e8f0;
   margin: 0;
 }
 
@@ -20,10 +20,10 @@ select {
 }
 
 button {
-  background: #111827;
+  background: #facc15;
   border: 0;
   border-radius: 7px;
-  color: #f9fafb;
+  color: #111827;
   cursor: pointer;
   font-weight: 800;
   padding: 9px 12px;
@@ -32,7 +32,7 @@ button {
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 3px solid #2563eb;
+  outline: 3px solid #60a5fa;
   outline-offset: 2px;
 }
 
@@ -50,7 +50,7 @@ select:focus-visible {
 }
 
 .eyebrow {
-  color: #4b5563;
+  color: #94a3b8;
   font-size: 12px;
   font-weight: 900;
   letter-spacing: 0.12em;
@@ -80,8 +80,8 @@ h2 {
 }
 
 .settings-section {
-  background: #ffffff;
-  border: 1px solid #d1d5db;
+  background: #1e293b;
+  border: 1px solid #334155;
   border-radius: 8px;
   display: grid;
   gap: 14px;
@@ -89,7 +89,7 @@ h2 {
 }
 
 label {
-  color: #374151;
+  color: #cbd5e1;
   display: grid;
   font-size: 13px;
   font-weight: 800;
@@ -99,8 +99,10 @@ label {
 input[type="text"],
 input[type="number"],
 select {
-  border: 1px solid #cbd5e1;
+  background: #0f172a;
+  border: 1px solid #334155;
   border-radius: 7px;
+  color: #e2e8f0;
   min-height: 38px;
   padding: 8px;
 }
@@ -117,7 +119,7 @@ select {
 }
 
 .hint {
-  color: #6b7280;
+  color: #94a3b8;
   font-size: 13px;
   line-height: 1.45;
 }
@@ -131,16 +133,17 @@ select {
 
 .hotkey-row button,
 .secondary-button {
-  background: #e5e7eb;
-  color: #111827;
+  background: #334155;
+  color: #e2e8f0;
 }
 
 .danger-section {
-  border-color: #fecaca;
+  border-color: #7f1d1d;
 }
 
 .danger-button {
   background: #991b1b;
+  color: #fee2e2;
 }
 
 .form-footer {
@@ -151,7 +154,7 @@ select {
 }
 
 #statusMessage {
-  color: #166534;
+  color: #4ade80;
   font-size: 13px;
   margin-right: auto;
 }

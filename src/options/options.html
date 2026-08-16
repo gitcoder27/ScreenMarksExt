@@ -74,12 +74,36 @@
           </div>
 
           <div class="hotkey-row">
+            <label for="startRangeHotkey">Mark start</label>
+            <input id="startRangeHotkey" type="text" spellcheck="false">
+            <button type="button" data-record-hotkey="startRangeHotkey">Record</button>
+          </div>
+
+          <div class="hotkey-row">
+            <label for="endRangeHotkey">Mark end</label>
+            <input id="endRangeHotkey" type="text" spellcheck="false">
+            <button type="button" data-record-hotkey="endRangeHotkey">Record</button>
+          </div>
+
+          <div class="hotkey-row">
+            <label for="nextSceneHotkey">Next saved timestamp</label>
+            <input id="nextSceneHotkey" type="text" spellcheck="false">
+            <button type="button" data-record-hotkey="nextSceneHotkey">Record</button>
+          </div>
+
+          <div class="hotkey-row">
+            <label for="randomVideoHotkey">Random video</label>
+            <input id="randomVideoHotkey" type="text" spellcheck="false">
+            <button type="button" data-record-hotkey="randomVideoHotkey">Record</button>
+          </div>
+
+          <div class="hotkey-row">
             <label for="openLibraryHotkey">Open library</label>
             <input id="openLibraryHotkey" type="text" spellcheck="false">
             <button type="button" data-record-hotkey="openLibraryHotkey">Record</button>
           </div>
 
-          <p class="hint">These hotkeys work while a supported page is focused and can be changed here. Browser-level command shortcuts can also be changed from the Chromium extensions shortcuts page.</p>
+          <p class="hint">These hotkeys work while a supported page is focused and can be changed here. Click Record and press any key — a single letter like S works, no modifier needed. Single-key hotkeys pause while you type in text fields. Browser-level command shortcuts can also be changed from the Chromium extensions shortcuts page.</p>
           <button id="openBrowserShortcutsButton" class="secondary-button" type="button">Open Browser Shortcut Settings</button>
         </section>
 

@@ -1,3 +1,11 @@
+importScripts(
+  "../shared/constants.js",
+  "../shared/time.js",
+  "../shared/ids.js",
+  "../shared/schema.js",
+  "../shared/storage.js"
+);
+
 const CONTENT_SCRIPT_FILES = [
   "src/shared/constants.js",
   "src/shared/time.js",
@@ -68,6 +76,12 @@ async function forwardToActiveTab(message) {
     return { ok: false, error: "No active tab found." };
   }
 
+  const tabUrl = tab.url || "";
+  const isSupportedPage = /^https?:/i.test(tabUrl) || tabUrl.startsWith("file://");
+  if (!isSupportedPage) {
+    return { ok: false, error: "SceneMarks runs on web pages. Open a page with a video first." };
+  }
+
   try {
     await ensureContentScript(tab.id);
     return await sendTabMessage(tab.id, message);
@@ -98,6 +112,88 @@ async function openVideoUrl(rawUrl) {
   }
 }
 
+function normalizeUrlKey(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ""));
+    if (!["http:", "https:", "file:"].includes(url.protocol)) {
+      return null;
+    }
+
+    // Ignore query params and fragments: players append tracking noise
+    // (trackId, ref, etc.) that would defeat exact-URL matching.
+    const path = url.pathname.replace(/\/+$/, "").toLowerCase() || "/";
+    return `${url.protocol}//${url.host.toLowerCase()}${path}`;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function getVideoUrlKeys(video) {
+  const urls = [video && video.canonicalUrl, ...((video && video.rawUrls) || [])];
+  const keys = new Set();
+
+  for (const raw of urls) {
+    const key = normalizeUrlKey(raw);
+    if (key) {
+      keys.add(key);
+    }
+  }
+
+  return keys;
+}
+
+function pickRandom(items) {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+async function openRandomVideo() {
+  const state = await SceneMarks.Storage.getState();
+  const videos = Object.values(state.videos);
+
+  if (!videos.length) {
+    return { ok: false, error: "SceneMarks library is empty." };
+  }
+
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const openUrlKeys = new Set();
+  for (const tab of tabs || []) {
+    const key = normalizeUrlKey(tab && tab.url);
+    if (key) {
+      openUrlKeys.add(key);
+    }
+  }
+
+  const candidates = videos.filter((video) => {
+    const openableUrl = video.canonicalUrl || (Array.isArray(video.rawUrls) ? video.rawUrls[0] : null);
+    if (!openableUrl || !Array.isArray(video.scenes) || !video.scenes.length) {
+      return false;
+    }
+
+    for (const key of getVideoUrlKeys(video)) {
+      if (openUrlKeys.has(key)) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  if (!candidates.length) {
+    return { ok: false, error: "Every saved video is already open in a tab in this window." };
+  }
+
+  const picked = pickRandom(candidates);
+  const url = picked.canonicalUrl || picked.rawUrls[0];
+  await chrome.tabs.create({ url });
+
+  return {
+    ok: true,
+    message: `Opening random video: ${picked.title || picked.canonicalUrl || "saved video"}`,
+    remainingCount: candidates.length - 1,
+    videoKey: picked.videoKey
+  };
+}
+
 chrome.commands.onCommand.addListener((command) => {
   if (command === "open-library") {
     openLibrary();
@@ -126,6 +222,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === "SCENEMARKS_OPEN_VIDEO_URL") {
     openVideoUrl(message.payload && message.payload.url).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEO) {
+    openRandomVideo().then(sendResponse);
     return true;
   }
 

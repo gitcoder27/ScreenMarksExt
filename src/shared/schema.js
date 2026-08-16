@@ -71,6 +71,10 @@
     return {
       quickSave: sanitizeText(hotkeys.quickSave || defaults.quickSave, 60),
       toggleRange: sanitizeText(hotkeys.toggleRange || defaults.toggleRange, 60),
+      startRange: sanitizeText(hotkeys.startRange || defaults.startRange, 60),
+      endRange: sanitizeText(hotkeys.endRange || defaults.endRange, 60),
+      nextScene: sanitizeText(hotkeys.nextScene || defaults.nextScene, 60),
+      randomVideo: sanitizeText(hotkeys.randomVideo || defaults.randomVideo, 60),
       openLibrary: sanitizeText(hotkeys.openLibrary || defaults.openLibrary, 60)
     };
   }

@@ -220,6 +220,26 @@
     return startRange(payload);
   }
 
+  async function jumpToNextScene() {
+    const detected = requireDetectedVideo();
+    if (!detected.ok) {
+      return detected;
+    }
+
+    const scenes = await Storage.getScenesForVideo(detected.snapshot.videoKey);
+    if (!scenes.length) {
+      return { ok: false, error: "No saved timestamps for this video." };
+    }
+
+    const currentSeconds = detected.snapshot.currentTimeSeconds;
+    const nextScene = scenes.find((scene) => scene.startSeconds > currentSeconds + 0.1) || scenes[0];
+    const result = await seekTo({ seconds: nextScene.startSeconds });
+
+    return result.ok
+      ? { ok: true, message: `Jumped to ${formatSeconds(nextScene.startSeconds)}.` }
+      : result;
+  }
+
   async function seekTo(payload) {
     const currentSettings = getSettingsSync();
     const behavior = payload && payload.behavior ? payload.behavior : currentSettings.defaultJumpBehavior;
@@ -338,8 +358,16 @@
     await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.OPEN_LIBRARY });
   }
 
+  async function openRandomVideoFromLibrary() {
+    const response = await chrome.runtime.sendMessage({
+      type: MESSAGE_TYPES.OPEN_RANDOM_VIDEO
+    });
+
+    return response || { ok: false, error: "Could not open a random video." };
+  }
+
   function installPageHotkeys() {
-    document.addEventListener("keydown", async (event) => {
+    root.addEventListener("keydown", async (event) => {
       const currentSettings = getSettingsSync();
       if (!currentSettings.enablePageHotkeys || event.repeat || isTextInputTarget(event.target)) {
         return;
@@ -352,6 +380,14 @@
         action = () => saveTimestamp({ quick: true });
       } else if (shortcutMatches(event, hotkeys.toggleRange)) {
         action = () => toggleRange({ quick: true });
+      } else if (shortcutMatches(event, hotkeys.startRange)) {
+        action = () => startRange({ quick: true });
+      } else if (shortcutMatches(event, hotkeys.endRange)) {
+        action = () => endRange({ quick: true });
+      } else if (shortcutMatches(event, hotkeys.nextScene)) {
+        action = jumpToNextScene;
+      } else if (shortcutMatches(event, hotkeys.randomVideo)) {
+        action = openRandomVideoFromLibrary;
       } else if (shortcutMatches(event, hotkeys.openLibrary)) {
         action = openLibrary;
       }
@@ -433,6 +469,7 @@
       quickSave: () => saveTimestamp({ quick: true }),
       toggleRange: () => toggleRange({ quick: true }),
       seekTo: (seconds) => seekTo({ seconds }),
+      deleteScene: (payload) => deleteScene(payload),
       openVideoAtScene
     });
     overlay.setEnabled(getSettingsSync().enableFloatingButton);

@@ -129,6 +129,54 @@
     videos.forEach((video) => elements.libraryList.append(renderVideo(video)));
   }
 
+  function pickRandomVideo() {
+    const videos = getFilteredVideos();
+
+    if (!videos.length) {
+      elements.summaryBox.textContent = "No videos to pick from under the current filters.";
+      return;
+    }
+
+    const picked = videos[Math.floor(Math.random() * videos.length)];
+    expandedVideoKeys.add(picked.videoKey);
+    render();
+
+    requestAnimationFrame(() => {
+      const card = elements.libraryList.querySelector(`[data-video-key="${CSS.escape(picked.videoKey)}"]`);
+      if (!card) {
+        return;
+      }
+
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+      card.classList.add("is-random-pick");
+      card.addEventListener("animationend", () => card.classList.remove("is-random-pick"), { once: true });
+    });
+
+    elements.summaryBox.textContent = `Random pick: ${picked.title || "Untitled video"}`;
+  }
+
+  function handleLibraryKeydown(event) {
+    if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+      return;
+    }
+
+    if (event.key.toLowerCase() !== "r") {
+      return;
+    }
+
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    if (target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']")) {
+      return;
+    }
+
+    event.preventDefault();
+    pickRandomVideo();
+  }
+
   function expandAllVideos() {
     getFilteredVideos().forEach((video) => expandedVideoKeys.add(video.videoKey));
     render();
@@ -143,6 +191,7 @@
     const card = createElement("article", "video-card");
     const isCollapsed = isVideoCollapsed(video.videoKey);
     card.classList.toggle("is-collapsed", isCollapsed);
+    card.dataset.videoKey = video.videoKey;
 
     const header = createElement("div", "video-card__header");
     const details = createElement("div");
@@ -358,6 +407,7 @@
       "searchInput",
       "platformFilter",
       "favoritesOnly",
+      "randomVideoButton",
       "expandAllButton",
       "collapseAllButton",
       "summaryBox",
@@ -374,10 +424,12 @@
     elements.searchInput.addEventListener("input", render);
     elements.platformFilter.addEventListener("change", render);
     elements.favoritesOnly.addEventListener("change", render);
+    elements.randomVideoButton.addEventListener("click", pickRandomVideo);
     elements.expandAllButton.addEventListener("click", expandAllVideos);
     elements.collapseAllButton.addEventListener("click", collapseAllVideos);
     elements.exportButton.addEventListener("click", exportData);
     elements.importInput.addEventListener("change", () => importData(elements.importInput.files[0]));
+    document.addEventListener("keydown", handleLibraryKeydown);
   }
 
   document.addEventListener("DOMContentLoaded", async () => {

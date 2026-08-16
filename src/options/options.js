@@ -19,6 +19,10 @@
       "enablePageHotkeys",
       "quickSaveHotkey",
       "toggleRangeHotkey",
+      "startRangeHotkey",
+      "endRangeHotkey",
+      "nextSceneHotkey",
+      "randomVideoHotkey",
       "openLibraryHotkey",
       "openBrowserShortcutsButton",
       "clearDataButton",
@@ -30,7 +34,7 @@
 
   function setStatus(message, isError) {
     elements.statusMessage.textContent = message;
-    elements.statusMessage.style.color = isError ? "#991b1b" : "#166534";
+    elements.statusMessage.style.color = isError ? "#fca5a5" : "#4ade80";
   }
 
   function formatKeyboardEvent(event) {
@@ -50,11 +54,12 @@
       parts.push("Shift");
     }
 
-    if (!["Control", "Meta", "Alt", "Shift"].includes(event.key)) {
-      parts.push(key);
+    if (["Control", "Meta", "Alt", "Shift"].includes(event.key)) {
+      return "";
     }
 
-    return parts.length > 1 ? parts.join("+") : "";
+    parts.push(key);
+    return parts.join("+");
   }
 
   async function loadSettings() {
@@ -69,6 +74,10 @@
     elements.enablePageHotkeys.checked = settings.enablePageHotkeys;
     elements.quickSaveHotkey.value = settings.hotkeys.quickSave;
     elements.toggleRangeHotkey.value = settings.hotkeys.toggleRange;
+    elements.startRangeHotkey.value = settings.hotkeys.startRange;
+    elements.endRangeHotkey.value = settings.hotkeys.endRange;
+    elements.nextSceneHotkey.value = settings.hotkeys.nextScene;
+    elements.randomVideoHotkey.value = settings.hotkeys.randomVideo;
     elements.openLibraryHotkey.value = settings.hotkeys.openLibrary;
   }
 
@@ -84,6 +93,10 @@
       hotkeys: {
         quickSave: elements.quickSaveHotkey.value,
         toggleRange: elements.toggleRangeHotkey.value,
+        startRange: elements.startRangeHotkey.value,
+        endRange: elements.endRangeHotkey.value,
+        nextScene: elements.nextSceneHotkey.value,
+        randomVideo: elements.randomVideoHotkey.value,
         openLibrary: elements.openLibraryHotkey.value
       }
     });
@@ -96,20 +109,35 @@
     recordTarget.input.focus();
   }
 
+  function stopRecording() {
+    if (recordTarget) {
+      recordTarget.button.textContent = "Record";
+      recordTarget = null;
+    }
+  }
+
   function handleRecording(event) {
     if (!recordTarget) {
       return;
     }
 
     event.preventDefault();
+
+    if (event.key === "Escape") {
+      recordTarget.input.blur();
+      stopRecording();
+      setStatus("Recording cancelled.", false);
+      return;
+    }
+
     const shortcut = formatKeyboardEvent(event);
-    if (!shortcut) {
+    if (!shortcut || !shortcut.trim()) {
       return;
     }
 
     recordTarget.input.value = shortcut;
-    recordTarget.button.textContent = "Record";
-    recordTarget = null;
+    recordTarget.input.blur();
+    stopRecording();
     setStatus("Hotkey recorded. Save settings to apply it.", false);
   }
 

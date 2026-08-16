@@ -198,13 +198,9 @@
         return;
       }
 
-      scenes.slice(0, 8).forEach((scene) => {
+      scenes.forEach((scene) => {
         currentSceneList.append(renderSceneRow({ scene, video: state.video, isCurrentVideo: true }));
       });
-
-      if (scenes.length > 8) {
-        currentSceneList.append(createElement("p", "scenemarks-overlay__more", `${scenes.length - 8} more in Library view`));
-      }
     }
 
     function renderLibrary(state) {
@@ -309,11 +305,22 @@
       const main = createElement("div", "scenemarks-overlay__scene-main");
       const time = createElement("span", "scenemarks-overlay__scene-time", formatRange(scene.startSeconds, scene.endSeconds));
       const note = createElement("span", "scenemarks-overlay__scene-note", scene.note || "Saved timestamp");
+      const rowActions = createElement("div", "scenemarks-overlay__scene-actions");
       const jump = createButton("scenemarks-overlay__jump", "Jump", () => jumpToScene(video, scene, isCurrentVideo));
+      const remove = createButton("scenemarks-overlay__delete", "\u00d7", () => removeScene(video, scene));
 
+      remove.title = "Delete scene";
+      remove.setAttribute("aria-label", `Delete scene at ${formatRange(scene.startSeconds, scene.endSeconds)}`);
+      rowActions.append(jump, remove);
       main.append(time, note);
-      row.append(main, jump);
+      row.append(main, rowActions);
       return row;
+    }
+
+    async function removeScene(video, scene) {
+      const result = await actions.deleteScene({ videoKey: video.videoKey, sceneId: scene.id });
+      showToast(result.ok ? "Scene deleted." : result.error || "Could not delete scene.");
+      await refresh();
     }
 
     async function jumpToScene(video, scene, isCurrentVideo) {
