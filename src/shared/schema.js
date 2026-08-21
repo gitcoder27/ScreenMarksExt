@@ -264,6 +264,7 @@
     normalizeSettings,
     normalizeState,
     normalizeTags,
+    normalizeVideo,
     sanitizeText,
     sortScenes
   };
