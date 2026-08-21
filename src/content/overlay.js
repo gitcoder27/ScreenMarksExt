@@ -66,6 +66,7 @@
     const librarySearch = createElement("input", "scenemarks-overlay__search");
     const libraryControls = createElement("div", "scenemarks-overlay__library-controls");
     const randomVideoButton = createButton("scenemarks-overlay__mini-action", "Random", handleRandomVideo);
+    const favoritesButton = createButton("scenemarks-overlay__mini-action", "Favorites", toggleFavoritesOnly);
     const expandAllButton = createButton("scenemarks-overlay__mini-action", "Expand All", expandAllLibraryVideos);
     const collapseAllButton = createButton("scenemarks-overlay__mini-action", "Collapse All", collapseAllLibraryVideos);
     const libraryList = createElement("div", "scenemarks-overlay__library");
@@ -78,6 +79,7 @@
     let latestState = null;
     let viewMode = "current";
     let lastRandomPickKey = null;
+    let favoritesOnly = false;
     const expandedVideoKeys = new Set();
 
     host.setAttribute("aria-label", "SceneMarks saved scene overlay");
@@ -91,7 +93,7 @@
     tabs.append(currentTab, libraryTab);
     actionsRow.append(saveButton, rangeButton);
     currentPanel.append(status, actionsRow, currentSceneList);
-    libraryControls.append(randomVideoButton, expandAllButton, collapseAllButton);
+    libraryControls.append(randomVideoButton, favoritesButton, expandAllButton, collapseAllButton);
     libraryPanel.append(librarySearch, libraryControls, libraryList);
     body.append(tabs, currentPanel, libraryPanel);
     host.append(header, body, toast);
@@ -223,17 +225,29 @@
     }
 
     function renderLibrary(state) {
+      favoritesButton.classList.toggle("is-active", favoritesOnly);
+      favoritesButton.setAttribute("aria-pressed", String(favoritesOnly));
+
       clearNode(libraryList);
 
       const videos = getFilteredVideos(state);
       if (!videos.length) {
-        libraryList.append(createElement("p", "scenemarks-overlay__empty", "No saved scenes match."));
+        libraryList.append(createElement(
+          "p",
+          "scenemarks-overlay__empty",
+          favoritesOnly ? "No favorites match." : "No saved scenes match."
+        ));
         return;
       }
 
       videos.forEach((video) => {
         libraryList.append(renderVideoGroup(video, state));
       });
+    }
+
+    function toggleFavoritesOnly() {
+      favoritesOnly = !favoritesOnly;
+      renderLibrary(latestState);
     }
 
     function expandAllLibraryVideos() {
@@ -289,9 +303,12 @@
       const videos = state && state.videos ? Object.values(state.videos) : [];
 
       return videos
+        .filter((video) => !favoritesOnly || video.favorite || video.scenes.some((scene) => scene.favorite))
         .map((video) => ({
           ...video,
-          scenes: video.scenes.filter((scene) => matchesQuery(video, scene, query))
+          scenes: video.scenes.filter((scene) =>
+            matchesQuery(video, scene, query) && (!favoritesOnly || video.favorite || scene.favorite)
+          )
         }))
         .filter((video) => video.scenes.length > 0)
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));

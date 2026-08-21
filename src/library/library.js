@@ -139,9 +139,16 @@
     renderPlatformOptions();
     const videos = getFilteredVideos();
     const sceneCount = videos.reduce((total, video) => total + video.scenes.length, 0);
+    const favoriteVideoCount = videos.filter((video) => video.favorite).length;
+    const favoriteSceneCount = videos.reduce(
+      (total, video) => total + video.scenes.filter((scene) => scene.favorite).length,
+      0
+    );
 
     clearNode(elements.libraryList);
-    elements.summaryBox.textContent = `${videos.length} videos, ${sceneCount} scenes`;
+    elements.summaryBox.textContent = `${videos.length} videos, ${sceneCount} scenes`
+      + (favoriteVideoCount ? `, ${favoriteVideoCount} favorited videos` : "")
+      + (favoriteSceneCount ? `, ${favoriteSceneCount} favorited timestamps` : "");
 
     if (!videos.length) {
       elements.libraryList.append(createElement("p", "empty-state", "No saved scenes match the current filters."));

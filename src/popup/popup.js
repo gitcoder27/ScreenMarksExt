@@ -55,6 +55,18 @@
     return button;
   }
 
+  function createFavoriteButton(isFavorite, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = isFavorite ? "favorite-toggle is-favorite" : "favorite-toggle";
+    button.textContent = isFavorite ? "\u2605" : "\u2606";
+    button.title = isFavorite ? "Unfavorite timestamp" : "Favorite timestamp";
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-pressed", String(Boolean(isFavorite)));
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
   function openSceneDialog(options) {
     elements.dialogTitle.textContent = options.title;
     elements.dialogTime.textContent = options.timeLabel;
@@ -210,12 +222,24 @@
       actions.className = "scene-actions";
       actions.append(
         createButton("Jump", () => jumpToScene(scene)),
+        createFavoriteButton(scene.favorite, () => toggleSceneFavorite(context.videoKey, scene)),
         createButton("Edit", () => editScene(context.videoKey, scene)),
         createButton("Delete", () => deleteScene(context.videoKey, scene.id))
       );
       row.append(actions);
       elements.sceneList.append(row);
     });
+  }
+
+  async function toggleSceneFavorite(videoKey, scene) {
+    const response = await Storage.updateScene(videoKey, scene.id, { favorite: !scene.favorite });
+
+    if (!response.ok) {
+      setStatus(response.error || "Could not update favorite.", true);
+      return;
+    }
+
+    await refreshContext();
   }
 
   async function saveMoment() {

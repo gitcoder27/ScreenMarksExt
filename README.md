@@ -16,17 +16,16 @@ It stores saved scenes locally in `chrome.storage.local`. It does not download v
 - Browser command shortcuts for quick save, range toggle, and library.
 - Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key on the next page load.)
 - Library page with search, filters, favorites, edit/delete, copy share text, export, import, and a Random pick button.
+- Favorites at both levels: star entire videos or individual timestamps from the library, the overlay, or the popup. The library's and overlay's favorites filters include any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.
-- Minimal permissions: no `<all_urls>` host permission.
+- Permissions: `storage`, `activeTab`, `scripting`, and `tabs`, plus an `<all_urls>` host permission so content scripts (video detection, overlay, queued jumps) run on every page without popup activation.
 
 ## Install In Brave
 
 1. Open `brave://extensions`.
 2. Enable Developer mode.
 3. Click **Load unpacked**.
-4. Select this folder:
-
-   `outputs/scenemarks`
+4. Select the repository root folder (the one containing `manifest.json`).
 
 5. Pin SceneMarks if you want quick popup access.
 
@@ -42,7 +41,8 @@ The same flow works in Chrome at `chrome://extensions`.
 6. Click **Jump** beside any saved scene to seek back to it.
 7. Use **Overlay On/Off** in the popup to show or hide the draggable page overlay.
 8. Use the overlay **Library** view to search saved videos without leaving the current page.
-9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick and highlight a random video that is not already open in a tab of the current window. When every matching video is already open, SceneMarks says so instead of re-picking one.
+9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite videos and scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick and highlight a random video that is not already open in a tab of the current window. When every matching video is already open, SceneMarks says so instead of re-picking one.
+10. Star a video or timestamp anywhere (library, overlay, popup) and it shows up under the favorites filters in the library page and the overlay Library view.
 
 ## Overlay Panel
 
@@ -52,12 +52,14 @@ From the overlay you can:
 
 - Save the current timestamp.
 - Start or end a scene range.
-- See saved timestamps/ranges for the current video in **Current** view.
-- Search all saved videos and scenes in **Library** view.
-- Pick a random saved video with the **Random** button. Videos already open in a tab of the current window are never picked, so repeated picks keep surfacing videos you have not opened yet.
+- See saved timestamps/ranges for the current video in **Current** view, and star any of them with the star button.
+- Search all saved videos and scenes in **Library** view, and star any video from its group header.
+- Toggle **Favorites** in Library view to show only favorited videos and favorited timestamps. A video appears when it is favorited itself or has at least one favorited timestamp.
+- Pick a random saved video with the **Random** button. Random picks from whatever the current search and favorites filters match, so toggle **Favorites** first to shuffle within your favorites. Videos already open in a tab of the current window are never picked, so repeated picks keep surfacing videos you have not opened yet.
 - Expand a video title to reveal its saved scenes, or use **Expand All** / **Collapse All** to scan faster.
 - Click **Jump** for the current video to seek immediately.
 - Click **Jump** for another saved video to open that video page and queue the timestamp jump.
+- Click the star beside a scene or video to favorite or unfavorite it.
 - Click the **x** button beside a scene to delete it.
 - Collapse the panel if you only want a small header.
 
@@ -96,9 +98,9 @@ To customize browser command shortcuts, open `brave://extensions/shortcuts` or `
 
 ## Generic HTML5 Video Support
 
-SceneMarks does not request `<all_urls>`. For generic pages, open the extension popup while the page is active. The extension uses `activeTab` and `scripting` to inject SceneMarks into that page after your click.
+SceneMarks content scripts run on all pages (`<all_urls>`) at `document_start`, so generic HTML5 video pages are detected automatically without opening the popup first. The popup-injection path (`activeTab` plus `scripting`) still exists as a fallback for pages where the auto-loaded script could not run.
 
-Generic page support can be disabled in Settings without changing extension permissions.
+Generic page support can be disabled in Settings. This only stops generic sites from being detected; it does not change extension permissions.
 
 ## Platform Adapters
 
@@ -107,9 +109,20 @@ Adapters only normalize video identity and titles. They do not access media stre
 - Netflix: extracts `/watch/{id}`.
 - Prime Video: extracts stable detail/video IDs when present, with path fallback.
 - Hotstar/JioHotstar: extracts numeric/path content IDs, with path fallback.
+- YouTube: extracts the stable 11-character video id from the `v` query parameter, `youtu.be/{id}` short links, or `/shorts/{id}` paths.
 - Generic: uses origin plus normalized path.
 
 Streaming services change player and URL behavior often. SceneMarks uses best-effort DOM/video interaction and may need adapter updates later.
+
+## Automated Tests
+
+The shared data layer — schema normalization, storage behavior, and time formatting — has dependency-free tests using Node's built-in test runner:
+
+```
+node --test test/automated/*.test.js
+```
+
+No npm packages or build step are required; any Node 18+ runtime can run them.
 
 ## Manual Testing
 
@@ -127,7 +140,10 @@ Do this first on a normal HTML5 video before trying streaming sites:
    - Saved rows appear in the popup.
    - **Jump** seeks to the saved timestamp.
    - **Edit** and **Delete** work.
+   - The star beside a saved scene in the popup toggles its favorite state.
 7. Open Library and confirm search plus export/import.
+8. Favorite a video from its card header (works while collapsed) and a timestamp from its row, then check **Favorites only**: both videos appear — the favorited video with all its scenes, the other with only the favorited timestamp.
+9. In the overlay, toggle **Favorites** in the Library view and confirm the same filtering, then press **Random** to shuffle within the favorites.
 
 Then test on Netflix, Prime Video, and Hotstar/JioHotstar:
 
@@ -142,5 +158,4 @@ Then test on Netflix, Prime Video, and Hotstar/JioHotstar:
 - SceneMarks saves timestamp references only. It never creates real video clips.
 - Some streaming sites may delay or block seeking until metadata/playback is ready.
 - Browser command shortcuts can conflict with site/browser shortcuts.
-- Generic pages require popup activation because broad host access is intentionally avoided.
-- YouTube-specific support is not included.
+- The `<all_urls>` host permission is broad; all processing stays local, but review `manifest.json` before installing builds you do not trust.

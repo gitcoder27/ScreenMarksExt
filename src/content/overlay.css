@@ -230,7 +230,7 @@
 .scenemarks-overlay__library-controls {
   display: grid;
   gap: 6px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .scenemarks-overlay__mini-action {
@@ -248,6 +248,11 @@
   line-height: 1;
   padding: 8px;
   user-select: none;
+}
+
+.scenemarks-overlay__mini-action.is-active {
+  background: #facc15;
+  color: #111827;
 }
 
 .scenemarks-overlay__empty,
