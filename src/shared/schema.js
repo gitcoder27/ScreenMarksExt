@@ -176,6 +176,7 @@
       title: sanitizeText(value.title, 300) || null,
       canonicalUrl: sanitizeText(value.canonicalUrl, 2048),
       rawUrls: Array.from(new Set(rawUrls)),
+      favorite: value.favorite === true,
       createdAt,
       updatedAt,
       scenes: sortScenes(scenes)

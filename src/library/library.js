@@ -35,6 +35,18 @@
     return button;
   }
 
+  function createFavoriteButton(isFavorite, label, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = isFavorite ? "favorite-toggle is-favorite" : "favorite-toggle";
+    button.textContent = isFavorite ? "\u2605" : "\u2606";
+    button.title = isFavorite ? `Unfavorite ${label}` : `Favorite ${label}`;
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-pressed", String(Boolean(isFavorite)));
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
   function normalizeSearch(value) {
     return String(value || "").trim().toLowerCase();
   }
@@ -79,13 +91,14 @@
       .map((video) => ({
         ...video,
         scenes: video.scenes.filter((scene) => {
-          const favoriteMatch = !favoritesOnly || scene.favorite;
-          return favoriteMatch && (sceneMatches(scene, query) || videoMatches({ ...video, scenes: [] }, query));
+          const favoriteMatch = !favoritesOnly || video.favorite || scene.favorite;
+          const queryMatch = sceneMatches(scene, query) || videoMatches({ ...video, scenes: [] }, query);
+          return favoriteMatch && queryMatch;
         })
       }))
       .filter((video) => {
         if (favoritesOnly) {
-          return video.scenes.length > 0;
+          return video.favorite || video.scenes.length > 0;
         }
 
         return video.scenes.length > 0 || videoMatches(video, query);
@@ -242,6 +255,7 @@
 
     title.append(caret, titleText, sceneCount);
     actions.append(
+      createFavoriteButton(video.favorite, "video", () => toggleVideoFavorite(video.videoKey, !video.favorite)),
       createButton("Open", () => openVideo(video)),
       createButton("Delete Video", () => deleteVideo(video.videoKey))
     );
@@ -287,7 +301,7 @@
     actions.append(
       createButton("Jump", () => openVideoAtScene(video, scene)),
       createButton("Open", () => openVideo(video)),
-      createButton(scene.favorite ? "Unfavorite" : "Favorite", () => toggleFavorite(video.videoKey, scene)),
+      createFavoriteButton(scene.favorite, "timestamp", () => toggleFavorite(video.videoKey, scene)),
       createButton("Edit", () => editScene(video.videoKey, scene)),
       createButton("Copy Text", () => copyShareText(video, scene)),
       createButton("Delete", () => deleteScene(video.videoKey, scene.id))
@@ -371,6 +385,19 @@
     }
 
     await Storage.updateScene(videoKey, scene.id, { note, tags });
+    await loadState();
+  }
+
+  async function toggleVideoFavorite(videoKey, favorite) {
+    const result = await Storage.updateVideo(videoKey, { favorite });
+    if (!result.ok) {
+      elements.summaryBox.textContent = result.error || "Could not update video favorite.";
+      return;
+    }
+
+    elements.summaryBox.textContent = favorite
+      ? "Video added to favorites."
+      : "Video removed from favorites.";
     await loadState();
   }
 

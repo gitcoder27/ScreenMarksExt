@@ -656,6 +656,20 @@
       toggleRange: guard(() => toggleRange({ quick: true })),
       seekTo: guard((seconds) => seekTo({ seconds })),
       deleteScene: guard((payload) => deleteScene(payload)),
+      updateSceneFavorite: guard(async (payload) => {
+        if (!payload || !payload.videoKey || !payload.sceneId) {
+          return { ok: false, error: "Missing favorite details." };
+        }
+
+        return Storage.updateScene(payload.videoKey, payload.sceneId, { favorite: payload.favorite === true });
+      }),
+      updateVideoFavorite: guard(async (payload) => {
+        if (!payload || !payload.videoKey) {
+          return { ok: false, error: "Missing favorite details." };
+        }
+
+        return Storage.updateVideo(payload.videoKey, { favorite: payload.favorite === true });
+      }),
       openVideoAtScene: guard(openVideoAtScene),
       pickRandomVideo: guard((payload) => pickRandomVideoFromLibrary(payload))
     });

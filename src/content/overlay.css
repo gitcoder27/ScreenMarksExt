@@ -295,6 +295,16 @@
   }
 }
 
+.scenemarks-overlay__video-row {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.scenemarks-overlay__video-row .scenemarks-overlay__video-header {
+  flex: 1;
+}
+
 .scenemarks-overlay__video-header {
   all: initial;
   align-items: center;
@@ -399,6 +409,34 @@
   padding: 6px 8px;
 }
 
+.scenemarks-overlay__favorite {
+  all: initial;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: #94a3b8;
+  cursor: pointer;
+  display: inline-flex;
+  font-family: inherit;
+  font-size: 14px;
+  height: 24px;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  user-select: none;
+  width: 24px;
+}
+
+.scenemarks-overlay__favorite:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #e2e8f0;
+}
+
+.scenemarks-overlay__favorite.is-favorite {
+  background: rgba(250, 204, 21, 0.16);
+  color: #fde047;
+}
+
 .scenemarks-overlay__delete {
   align-items: center;
   background: transparent;
@@ -419,6 +457,7 @@
 .scenemarks-overlay__primary:focus-visible,
 .scenemarks-overlay__secondary:focus-visible,
 .scenemarks-overlay__jump:focus-visible,
+.scenemarks-overlay__favorite:focus-visible,
 .scenemarks-overlay__delete:focus-visible,
 .scenemarks-overlay__tab:focus-visible,
 .scenemarks-overlay__search:focus-visible,

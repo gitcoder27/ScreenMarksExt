@@ -21,6 +21,18 @@
     return button;
   }
 
+  function createFavoriteButton(isFavorite, label, onClick) {
+    const button = createButton(
+      isFavorite ? "scenemarks-overlay__favorite is-favorite" : "scenemarks-overlay__favorite",
+      isFavorite ? "\u2605" : "\u2606",
+      onClick
+    );
+    button.title = isFavorite ? `Unfavorite ${label}` : `Favorite ${label}`;
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-pressed", String(Boolean(isFavorite)));
+    return button;
+  }
+
   function clearNode(node) {
     while (node.firstChild) {
       node.firstChild.remove();
@@ -308,15 +320,18 @@
       const isExpanded = expandedVideoKeys.has(video.videoKey);
       group.classList.toggle("is-collapsed", !isExpanded);
 
-      const headerRow = createButton("scenemarks-overlay__video-header", "", () => toggleVideoGroup(video.videoKey));
-      headerRow.setAttribute("aria-expanded", String(isExpanded));
+      const headerRow = createElement("div", "scenemarks-overlay__video-row");
+      const headerButton = createButton("scenemarks-overlay__video-header", "", () => toggleVideoGroup(video.videoKey));
+      headerButton.setAttribute("aria-expanded", String(isExpanded));
       const titleText = video.title || video.canonicalUrl || video.videoKey;
       const caret = createElement("span", "scenemarks-overlay__video-caret", isExpanded ? "-" : "+");
       const titleNode = createElement("span", "scenemarks-overlay__video-title", titleText);
       const meta = createElement("span", "scenemarks-overlay__video-meta", `${video.platform} - ${video.scenes.length} scenes`);
+      const favoriteButton = createFavoriteButton(video.favorite, "video", () => toggleVideoFavorite(video));
       const sceneContainer = createElement("div", "scenemarks-overlay__video-scenes");
 
-      headerRow.append(caret, titleNode, meta);
+      headerButton.append(caret, titleNode, meta);
+      headerRow.append(headerButton, favoriteButton);
       group.append(headerRow);
 
       sceneContainer.hidden = !isExpanded;
@@ -353,14 +368,38 @@
       const note = createElement("span", "scenemarks-overlay__scene-note", scene.note || "Saved timestamp");
       const rowActions = createElement("div", "scenemarks-overlay__scene-actions");
       const jump = createButton("scenemarks-overlay__jump", "Jump", () => jumpToScene(video, scene, isCurrentVideo));
+      const favorite = createFavoriteButton(scene.favorite, "timestamp", () => toggleSceneFavorite(video, scene));
       const remove = createButton("scenemarks-overlay__delete", "\u00d7", () => removeScene(video, scene));
 
       remove.title = "Delete scene";
       remove.setAttribute("aria-label", `Delete scene at ${formatRange(scene.startSeconds, scene.endSeconds)}`);
-      rowActions.append(jump, remove);
+      rowActions.append(jump, favorite, remove);
       main.append(time, note);
       row.append(main, rowActions);
       return row;
+    }
+
+    async function toggleSceneFavorite(video, scene) {
+      const result = await actions.updateSceneFavorite({
+        videoKey: video.videoKey,
+        sceneId: scene.id,
+        favorite: !scene.favorite
+      });
+      showToast(result.ok
+        ? (scene.favorite ? "Timestamp unfavorited." : "Timestamp favorited.")
+        : result.error || "Could not update favorite.");
+      await refresh();
+    }
+
+    async function toggleVideoFavorite(video) {
+      const result = await actions.updateVideoFavorite({
+        videoKey: video.videoKey,
+        favorite: !video.favorite
+      });
+      showToast(result.ok
+        ? (video.favorite ? "Video unfavorited." : "Video favorited.")
+        : result.error || "Could not update favorite.");
+      await refresh();
     }
 
     async function removeScene(video, scene) {

@@ -296,6 +296,28 @@
     return { ok: deleted, error: deleted ? null : "Scene not found." };
   }
 
+  async function updateVideo(videoKey, updates) {
+    let updatedVideo = null;
+    await updateState((state) => {
+      const video = state.videos[videoKey];
+      if (!video) {
+        return state;
+      }
+
+      updatedVideo = {
+        ...video,
+        favorite: updates && updates.favorite === undefined ? video.favorite : updates.favorite === true,
+        updatedAt: new Date().toISOString()
+      };
+      state.videos[videoKey] = updatedVideo;
+      return state;
+    });
+
+    return updatedVideo
+      ? { ok: true, video: updatedVideo }
+      : { ok: false, error: "Video not found." };
+  }
+
   async function updateScene(videoKey, sceneId, updates) {
     let updatedScene = null;
     await updateState((state) => {
@@ -422,6 +444,7 @@
       title: incoming.title || existing.title,
       canonicalUrl: incoming.canonicalUrl || existing.canonicalUrl,
       rawUrls: Array.from(new Set([...existing.rawUrls, ...incoming.rawUrls])),
+      favorite: existing.favorite || incoming.favorite,
       updatedAt: new Date().toISOString(),
       scenes: sortScenes(mergedScenes)
     };
@@ -485,6 +508,7 @@
     setPendingJump,
     startRange,
     updateScene,
+    updateVideo,
     updateSettings,
     updateState,
     upsertVideo

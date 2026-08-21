@@ -244,6 +244,21 @@ select {
   color: #111827;
 }
 
+.video-actions button.favorite-toggle,
+.scene-actions button.favorite-toggle {
+  background: #334155;
+  color: #94a3b8;
+  font-size: 14px;
+  line-height: 1;
+  padding: 6px 9px;
+}
+
+.video-actions button.favorite-toggle.is-favorite,
+.scene-actions button.favorite-toggle.is-favorite {
+  background: rgba(250, 204, 21, 0.18);
+  color: #fde047;
+}
+
 .scene-table {
   display: grid;
 }
