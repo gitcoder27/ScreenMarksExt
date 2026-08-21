@@ -483,6 +483,15 @@
     return response || { ok: false, error: "Could not open a random video." };
   }
 
+  async function pickRandomVideoFromLibrary(payload) {
+    const response = await chrome.runtime.sendMessage({
+      type: MESSAGE_TYPES.PICK_RANDOM_VIDEO,
+      payload: payload || {}
+    });
+
+    return response || { ok: false, error: "Could not pick a random video." };
+  }
+
   async function toggleOverlayVisibility() {
     const enabled = !getSettingsSync().enableFloatingButton;
     settings = await Storage.updateSettings({ enableFloatingButton: enabled });
@@ -647,7 +656,8 @@
       toggleRange: guard(() => toggleRange({ quick: true })),
       seekTo: guard((seconds) => seekTo({ seconds })),
       deleteScene: guard((payload) => deleteScene(payload)),
-      openVideoAtScene: guard(openVideoAtScene)
+      openVideoAtScene: guard(openVideoAtScene),
+      pickRandomVideo: guard((payload) => pickRandomVideoFromLibrary(payload))
     });
     overlay.setEnabled(getSettingsSync().enableFloatingButton);
   }

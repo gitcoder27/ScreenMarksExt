@@ -138,7 +138,9 @@
     videos.forEach((video) => elements.libraryList.append(renderVideo(video)));
   }
 
-  function pickRandomVideo() {
+  let lastRandomPickKey = null;
+
+  async function pickRandomVideo() {
     const videos = getFilteredVideos();
 
     if (!videos.length) {
@@ -146,12 +148,33 @@
       return;
     }
 
-    const picked = videos[Math.floor(Math.random() * videos.length)];
-    expandedVideoKeys.add(picked.videoKey);
+    // The background picker drops videos already open in this window's
+    // tabs, so the pick is always a video you have not opened yet.
+    let response = null;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: SceneMarks.Constants.MESSAGE_TYPES.PICK_RANDOM_VIDEO,
+        payload: {
+          videoKeys: videos.map((video) => video.videoKey),
+          excludeVideoKey: lastRandomPickKey
+        }
+      });
+    } catch (_error) {
+      // Fall through to the shared error handling below.
+    }
+
+    if (!response || !response.ok) {
+      lastRandomPickKey = null;
+      elements.summaryBox.textContent = (response && response.error) || "Random pick is unavailable right now.";
+      return;
+    }
+
+    lastRandomPickKey = response.video.videoKey;
+    expandedVideoKeys.add(response.video.videoKey);
     render();
 
     requestAnimationFrame(() => {
-      const card = elements.libraryList.querySelector(`[data-video-key="${CSS.escape(picked.videoKey)}"]`);
+      const card = elements.libraryList.querySelector(`[data-video-key="${CSS.escape(response.video.videoKey)}"]`);
       if (!card) {
         return;
       }
@@ -161,7 +184,7 @@
       card.addEventListener("animationend", () => card.classList.remove("is-random-pick"), { once: true });
     });
 
-    elements.summaryBox.textContent = `Random pick: ${picked.title || "Untitled video"}`;
+    elements.summaryBox.textContent = `Random pick: ${response.video.title || "Untitled video"}`;
   }
 
   function handleLibraryKeydown(event) {

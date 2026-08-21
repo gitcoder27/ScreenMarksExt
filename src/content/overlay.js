@@ -53,6 +53,7 @@
     const currentSceneList = createElement("div", "scenemarks-overlay__list");
     const librarySearch = createElement("input", "scenemarks-overlay__search");
     const libraryControls = createElement("div", "scenemarks-overlay__library-controls");
+    const randomVideoButton = createButton("scenemarks-overlay__mini-action", "Random", handleRandomVideo);
     const expandAllButton = createButton("scenemarks-overlay__mini-action", "Expand All", expandAllLibraryVideos);
     const collapseAllButton = createButton("scenemarks-overlay__mini-action", "Collapse All", collapseAllLibraryVideos);
     const libraryList = createElement("div", "scenemarks-overlay__library");
@@ -64,6 +65,7 @@
     let toastTimer = null;
     let latestState = null;
     let viewMode = "current";
+    let lastRandomPickKey = null;
     const expandedVideoKeys = new Set();
 
     host.setAttribute("aria-label", "SceneMarks saved scene overlay");
@@ -77,7 +79,7 @@
     tabs.append(currentTab, libraryTab);
     actionsRow.append(saveButton, rangeButton);
     currentPanel.append(status, actionsRow, currentSceneList);
-    libraryControls.append(expandAllButton, collapseAllButton);
+    libraryControls.append(randomVideoButton, expandAllButton, collapseAllButton);
     libraryPanel.append(librarySearch, libraryControls, libraryList);
     body.append(tabs, currentPanel, libraryPanel);
     host.append(header, body, toast);
@@ -232,6 +234,44 @@
       renderLibrary(latestState);
     }
 
+    async function handleRandomVideo() {
+      const videos = getFilteredVideos(latestState);
+      if (!videos.length) {
+        showToast("No saved scenes match.");
+        return;
+      }
+
+      // The background picker drops videos already open in this window's
+      // tabs and avoids repeating the previous pick.
+      const result = await actions.pickRandomVideo({
+        videoKeys: videos.map((video) => video.videoKey),
+        excludeVideoKey: lastRandomPickKey
+      });
+
+      if (!result || !result.ok) {
+        lastRandomPickKey = null;
+        showToast((result && result.error) || "Could not pick a random video.");
+        return;
+      }
+
+      lastRandomPickKey = result.video.videoKey;
+      expandedVideoKeys.add(result.video.videoKey);
+      renderLibrary(latestState);
+
+      requestAnimationFrame(() => {
+        const group = libraryList.querySelector(`[data-video-key="${CSS.escape(result.video.videoKey)}"]`);
+        if (!group) {
+          return;
+        }
+
+        group.scrollIntoView({ behavior: "smooth", block: "center" });
+        group.classList.add("is-random-pick");
+        group.addEventListener("animationend", () => group.classList.remove("is-random-pick"), { once: true });
+      });
+
+      showToast(`Random pick: ${result.video.title || result.video.canonicalUrl || "saved video"}`);
+    }
+
     function getFilteredVideos(state) {
       const query = librarySearch.value.trim().toLowerCase();
       const videos = state && state.videos ? Object.values(state.videos) : [];
@@ -264,6 +304,7 @@
 
     function renderVideoGroup(video, state) {
       const group = createElement("article", "scenemarks-overlay__video");
+      group.dataset.videoKey = video.videoKey;
       const isExpanded = expandedVideoKeys.has(video.videoKey);
       group.classList.toggle("is-collapsed", !isExpanded);
 

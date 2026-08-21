@@ -230,7 +230,7 @@
 .scenemarks-overlay__library-controls {
   display: grid;
   gap: 6px;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .scenemarks-overlay__mini-action {
@@ -278,6 +278,21 @@
   font-family: inherit;
   gap: 6px;
   padding: 7px;
+}
+
+.scenemarks-overlay__video.is-random-pick {
+  animation: scenemarks-random-pick-glow 1.8s ease-out;
+}
+
+@keyframes scenemarks-random-pick-glow {
+  0% {
+    border-color: rgba(250, 204, 21, 0.95);
+    box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.55), 0 0 26px rgba(250, 204, 21, 0.32);
+  }
+  100% {
+    border-color: #334155;
+    box-shadow: none;
+  }
 }
 
 .scenemarks-overlay__video-header {

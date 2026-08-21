@@ -121,10 +121,22 @@ function normalizeUrlKey(rawUrl) {
       return null;
     }
 
-    // Ignore query params and fragments: players append tracking noise
-    // (trackId, ref, etc.) that would defeat exact-URL matching.
+    // Ignore most query params and fragments: players append tracking
+    // noise (trackId, ref, etc.) that would defeat exact-URL matching.
+    // YouTube is the exception: its video id lives in ?v=, so dropping it
+    // would collapse every watch URL to the same key and make one open
+    // YouTube tab exclude the whole platform.
+    const host = url.host.toLowerCase();
     const path = url.pathname.replace(/\/+$/, "").toLowerCase() || "/";
-    return `${url.protocol}//${url.host.toLowerCase()}${path}`;
+    let key = `${url.protocol}//${host}${path}`;
+    if (/(^|\.)youtube\.com$/.test(host) && path === "/watch") {
+      const videoId = url.searchParams.get("v");
+      if (videoId) {
+        key += `?v=${videoId.toLowerCase()}`;
+      }
+    }
+
+    return key;
   } catch (_error) {
     return null;
   }
@@ -144,8 +156,68 @@ function getVideoUrlKeys(video) {
   return keys;
 }
 
+async function getOpenTabUrlKeys() {
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const openUrlKeys = new Set();
+
+  for (const tab of tabs || []) {
+    const key = normalizeUrlKey(tab && tab.url);
+    if (key) {
+      openUrlKeys.add(key);
+    }
+  }
+
+  return openUrlKeys;
+}
+
+function isOpenInTab(video, openUrlKeys) {
+  for (const key of getVideoUrlKeys(video)) {
+    if (openUrlKeys.has(key)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function pickRandom(items) {
   return items[Math.floor(Math.random() * items.length)];
+}
+
+// Shared picker behind the library page and overlay Random buttons: it
+// restricts the pool to videoKeys when provided, drops videos already open
+// in this window's tabs, and avoids repeating excludeVideoKey (the previous
+// pick) whenever alternatives exist. It returns the pick without opening it.
+async function pickRandomVideoCandidate(payload) {
+  const options = payload && typeof payload === "object" ? payload : {};
+  const state = await SceneMarks.Storage.getState();
+  let videos = Object.values(state.videos);
+
+  if (Array.isArray(options.videoKeys) && options.videoKeys.length) {
+    const allowed = new Set(options.videoKeys);
+    videos = videos.filter((video) => allowed.has(video.videoKey));
+  }
+
+  const openUrlKeys = await getOpenTabUrlKeys();
+  const candidates = videos.filter((video) => {
+    const openableUrl = video.canonicalUrl || (Array.isArray(video.rawUrls) ? video.rawUrls[0] : null);
+    return Boolean(openableUrl) && !isOpenInTab(video, openUrlKeys);
+  });
+
+  if (!candidates.length) {
+    return { ok: false, error: "Every matching video is already open in a tab in this window." };
+  }
+
+  const pool = options.excludeVideoKey && candidates.length > 1
+    ? candidates.filter((video) => video.videoKey !== options.excludeVideoKey)
+    : candidates;
+  const picked = pickRandom(pool);
+
+  return {
+    ok: true,
+    video: picked,
+    remainingCount: candidates.length - 1
+  };
 }
 
 async function openRandomVideo() {
@@ -156,28 +228,13 @@ async function openRandomVideo() {
     return { ok: false, error: "SceneMarks library is empty." };
   }
 
-  const tabs = await chrome.tabs.query({ currentWindow: true });
-  const openUrlKeys = new Set();
-  for (const tab of tabs || []) {
-    const key = normalizeUrlKey(tab && tab.url);
-    if (key) {
-      openUrlKeys.add(key);
-    }
-  }
-
+  const openUrlKeys = await getOpenTabUrlKeys();
   const candidates = videos.filter((video) => {
     const openableUrl = video.canonicalUrl || (Array.isArray(video.rawUrls) ? video.rawUrls[0] : null);
-    if (!openableUrl || !Array.isArray(video.scenes) || !video.scenes.length) {
-      return false;
-    }
-
-    for (const key of getVideoUrlKeys(video)) {
-      if (openUrlKeys.has(key)) {
-        return false;
-      }
-    }
-
-    return true;
+    return Boolean(openableUrl)
+      && Array.isArray(video.scenes)
+      && video.scenes.length > 0
+      && !isOpenInTab(video, openUrlKeys);
   });
 
   if (!candidates.length) {
@@ -229,6 +286,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEO) {
     openRandomVideo().then(sendResponse);
+    return true;
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.PICK_RANDOM_VIDEO) {
+    pickRandomVideoCandidate(message.payload).then(sendResponse);
     return true;
   }
 

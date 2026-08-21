@@ -42,7 +42,7 @@ The same flow works in Chrome at `chrome://extensions`.
 6. Click **Jump** beside any saved scene to seek back to it.
 7. Use **Overlay On/Off** in the popup to show or hide the draggable page overlay.
 8. Use the overlay **Library** view to search saved videos without leaving the current page.
-9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick and highlight a random video from the list when you have nothing specific in mind.
+9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick and highlight a random video that is not already open in a tab of the current window. When every matching video is already open, SceneMarks says so instead of re-picking one.
 
 ## Overlay Panel
 
@@ -54,6 +54,7 @@ From the overlay you can:
 - Start or end a scene range.
 - See saved timestamps/ranges for the current video in **Current** view.
 - Search all saved videos and scenes in **Library** view.
+- Pick a random saved video with the **Random** button. Videos already open in a tab of the current window are never picked, so repeated picks keep surfacing videos you have not opened yet.
 - Expand a video title to reveal its saved scenes, or use **Expand All** / **Collapse All** to scan faster.
 - Click **Jump** for the current video to seek immediately.
 - Click **Jump** for another saved video to open that video page and queue the timestamp jump.
@@ -83,7 +84,7 @@ Default page hotkeys:
 - `Alt+Shift+D`: mark range end only.
 - `Alt+Shift+N`: jump to the next saved timestamp for the current video. Press repeatedly to rotate through all saved timestamps from the beginning.
 - `Alt+Shift+B`: jump back through saved timestamps for the current video. It skips the most recent previous timestamp — the one you just jumped to or are still near — and lands on the one before it, so repeated presses keep cycling backwards instead of re-landing on the same timestamp while playback moves on. At the first saved timestamp it wraps to the last one.
-- `Alt+Shift+R`: open a random video from the library. Videos already open in a tab of the current window are never picked, so repeated jumps keep surfacing videos you have not opened yet. Query strings and tracking parameters are ignored when matching open tabs, so player URLs with different tracking noise still count as already open.
+- `Alt+Shift+R`: open a random video from the library. Videos already open in a tab of the current window are never picked, so repeated jumps keep surfacing videos you have not opened yet. Query strings and tracking parameters are ignored when matching open tabs, so player URLs with different tracking noise still count as already open (YouTube video ids are preserved, since they live in the URL query). The library page and overlay Random buttons use the same matching.
 - `Alt+Shift+O`: show or hide the overlay panel.
 - `Alt+Shift+L`: open library.
 
