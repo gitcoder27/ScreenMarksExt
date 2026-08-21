@@ -82,6 +82,7 @@ Default page hotkeys:
 - `Alt+Shift+A`: mark range start only.
 - `Alt+Shift+D`: mark range end only.
 - `Alt+Shift+N`: jump to the next saved timestamp for the current video. Press repeatedly to rotate through all saved timestamps from the beginning.
+- `Alt+Shift+B`: jump back through saved timestamps for the current video. It skips the most recent previous timestamp — the one you just jumped to or are still near — and lands on the one before it, so repeated presses keep cycling backwards instead of re-landing on the same timestamp while playback moves on. At the first saved timestamp it wraps to the last one.
 - `Alt+Shift+R`: open a random video from the library. Videos already open in a tab of the current window are never picked, so repeated jumps keep surfacing videos you have not opened yet. Query strings and tracking parameters are ignored when matching open tabs, so player URLs with different tracking noise still count as already open.
 - `Alt+Shift+O`: show or hide the overlay panel.
 - `Alt+Shift+L`: open library.

@@ -22,6 +22,7 @@
       "startRangeHotkey",
       "endRangeHotkey",
       "nextSceneHotkey",
+      "previousSceneHotkey",
       "randomVideoHotkey",
       "toggleOverlayHotkey",
       "openLibraryHotkey",
@@ -78,6 +79,7 @@
     elements.startRangeHotkey.value = settings.hotkeys.startRange;
     elements.endRangeHotkey.value = settings.hotkeys.endRange;
     elements.nextSceneHotkey.value = settings.hotkeys.nextScene;
+    elements.previousSceneHotkey.value = settings.hotkeys.previousScene;
     elements.randomVideoHotkey.value = settings.hotkeys.randomVideo;
     elements.toggleOverlayHotkey.value = settings.hotkeys.toggleOverlay;
     elements.openLibraryHotkey.value = settings.hotkeys.openLibrary;
@@ -98,6 +100,7 @@
         startRange: elements.startRangeHotkey.value,
         endRange: elements.endRangeHotkey.value,
         nextScene: elements.nextSceneHotkey.value,
+        previousScene: elements.previousSceneHotkey.value,
         randomVideo: elements.randomVideoHotkey.value,
         toggleOverlay: elements.toggleOverlayHotkey.value,
         openLibrary: elements.openLibraryHotkey.value

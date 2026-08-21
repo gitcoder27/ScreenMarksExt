@@ -311,6 +311,41 @@
       : result;
   }
 
+  async function jumpToPreviousScene() {
+    const detected = requireDetectedVideo();
+    if (!detected.ok) {
+      return detected;
+    }
+
+    const scenes = await Storage.getScenesForVideo(detected.snapshot.videoKey);
+    if (!scenes.length) {
+      return { ok: false, error: "No saved timestamps for this video." };
+    }
+
+    const currentSeconds = detected.snapshot.currentTimeSeconds;
+    // Anchor on the most recent timestamp at or before the current position:
+    // right after a backwards jump that is the timestamp playback just left,
+    // otherwise it is the nearest previous one. Skip the anchor and land on
+    // the timestamp before it, so repeated presses keep cycling backwards
+    // instead of re-landing on the same timestamp while playback creeps
+    // forward. With no anchor (before the first timestamp) or none before
+    // the anchor, wrap to the last timestamp.
+    let anchorIndex = -1;
+    for (let i = scenes.length - 1; i >= 0; i -= 1) {
+      if (scenes[i].startSeconds <= currentSeconds + 0.1) {
+        anchorIndex = i;
+        break;
+      }
+    }
+
+    const previousScene = anchorIndex >= 1 ? scenes[anchorIndex - 1] : scenes[scenes.length - 1];
+    const result = await seekTo({ seconds: previousScene.startSeconds });
+
+    return result.ok
+      ? { ok: true, message: `Jumped to ${formatSeconds(previousScene.startSeconds)}.` }
+      : result;
+  }
+
   async function seekTo(payload) {
     const currentSettings = getSettingsSync();
     const behavior = payload && payload.behavior ? payload.behavior : currentSettings.defaultJumpBehavior;
@@ -484,6 +519,8 @@
         action = () => endRange({ quick: true });
       } else if (shortcutMatches(event, hotkeys.nextScene)) {
         action = jumpToNextScene;
+      } else if (shortcutMatches(event, hotkeys.previousScene)) {
+        action = jumpToPreviousScene;
       } else if (shortcutMatches(event, hotkeys.randomVideo)) {
         action = openRandomVideoFromLibrary;
       } else if (shortcutMatches(event, hotkeys.toggleOverlay)) {

@@ -74,6 +74,7 @@
       startRange: sanitizeText(hotkeys.startRange || defaults.startRange, 60),
       endRange: sanitizeText(hotkeys.endRange || defaults.endRange, 60),
       nextScene: sanitizeText(hotkeys.nextScene || defaults.nextScene, 60),
+      previousScene: sanitizeText(hotkeys.previousScene || defaults.previousScene, 60),
       randomVideo: sanitizeText(hotkeys.randomVideo || defaults.randomVideo, 60),
       toggleOverlay: sanitizeText(hotkeys.toggleOverlay || defaults.toggleOverlay, 60),
       openLibrary: sanitizeText(hotkeys.openLibrary || defaults.openLibrary, 60)

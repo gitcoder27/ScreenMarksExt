@@ -22,6 +22,7 @@
       startRange: "Alt+Shift+A",
       endRange: "Alt+Shift+D",
       nextScene: "Alt+Shift+N",
+      previousScene: "Alt+Shift+B",
       randomVideo: "Alt+Shift+R",
       toggleOverlay: "Alt+Shift+O",
       openLibrary: "Alt+Shift+L"
