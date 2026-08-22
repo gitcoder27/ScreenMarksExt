@@ -7,7 +7,7 @@
 
   const SceneMarks = root.SceneMarks;
   const { MESSAGE_TYPES } = SceneMarks.Constants;
-  const { formatSeconds } = SceneMarks.Time;
+  const { formatRange, formatSeconds } = SceneMarks.Time;
   const Storage = SceneMarks.Storage;
   let settings = null;
   let overlay = null;
@@ -170,7 +170,7 @@
       return {
         ok: false,
         snapshot,
-        error: "No active video detected. Start playback or reload the page, then try again."
+        error: "No video detected \u2014 start playback first"
       };
     }
 
@@ -212,7 +212,7 @@
     const note = payload && payload.note ? payload.note : "";
 
     if (payload && payload.quick && currentSettings.quickSaveRequiresNote && !note.trim()) {
-      return { ok: false, requiresNote: true, error: "Quick save requires a note in settings." };
+      return { ok: false, requiresNote: true, error: "Quick save requires a note in settings" };
     }
 
     const result = await Storage.saveScene(
@@ -229,7 +229,7 @@
     );
 
     if (result.duplicate && payload && payload.quick) {
-      return { ok: false, duplicate: true, error: "A nearby scene already exists." };
+      return { ok: false, duplicate: true, error: "A nearby scene already exists" };
     }
 
     if (result.ok) {
@@ -255,7 +255,7 @@
       scheduleOverlayRefresh(100);
       return {
         ...result,
-        message: `Range start marked at ${formatSeconds(result.draft.startSeconds)}.`
+        message: `Range start ${formatSeconds(result.draft.startSeconds)}`
       };
     }
 
@@ -271,7 +271,10 @@
     const result = await Storage.endRange(detected.snapshot, detected.snapshot.currentTimeSeconds, payload || {});
     if (result.ok) {
       scheduleOverlayRefresh(100);
-      return { ...result, message: "Scene range saved." };
+      return {
+        ...result,
+        message: `Range saved ${formatRange(result.scene.startSeconds, result.scene.endSeconds)}`
+      };
     }
 
     return result;
@@ -307,7 +310,7 @@
     const result = await seekTo({ seconds: nextScene.startSeconds });
 
     return result.ok
-      ? { ok: true, message: `Jumped to ${formatSeconds(nextScene.startSeconds)}.` }
+      ? { ok: true, message: `Jumped to ${formatSeconds(nextScene.startSeconds)}` }
       : result;
   }
 
@@ -342,7 +345,7 @@
     const result = await seekTo({ seconds: previousScene.startSeconds });
 
     return result.ok
-      ? { ok: true, message: `Jumped to ${formatSeconds(previousScene.startSeconds)}.` }
+      ? { ok: true, message: `Jumped to ${formatSeconds(previousScene.startSeconds)}` }
       : result;
   }
 
@@ -500,7 +503,7 @@
       overlay.setEnabled(enabled);
     }
 
-    return { ok: true, message: enabled ? "Overlay shown." : "Overlay hidden." };
+    return { ok: true, message: enabled ? "Overlay shown" : "Overlay hidden" };
   }
 
   function installPageHotkeys() {
@@ -519,7 +522,12 @@
       let action = null;
 
       if (shortcutMatches(event, hotkeys.quickSave)) {
-        action = () => saveTimestamp({ quick: true });
+        action = async () => {
+          const result = await saveTimestamp({ quick: true });
+          return result.ok && result.scene
+            ? { ...result, message: `Saved ${formatSeconds(result.scene.startSeconds)}` }
+            : result;
+        };
       } else if (shortcutMatches(event, hotkeys.toggleRange)) {
         action = () => toggleRange({ quick: true });
       } else if (shortcutMatches(event, hotkeys.startRange)) {
@@ -554,11 +562,11 @@
       }
 
       if (overlay && result && result.error) {
-        overlay.showToast(result.error);
+        overlay.showToast(result.error, "error");
       } else if (overlay && result && result.message) {
-        overlay.showToast(result.message);
+        overlay.showToast(result.message, "success");
       } else if (overlay && result && result.ok) {
-        overlay.showToast("SceneMarks action complete.");
+        overlay.showToast("Done", "info");
       }
     };
 
@@ -614,7 +622,7 @@
         }
 
         if (overlay) {
-          overlay.showToast(error.message || "Could not complete queued jump.");
+          overlay.showToast(error.message || "Could not complete queued jump", "error");
         }
       });
     }, Number.isFinite(delayMs) ? delayMs : 500);
@@ -639,16 +647,17 @@
     if (overlay) {
       overlay.showToast(
         seekResult.ok
-          ? `Jumped to ${formatSeconds(result.pendingJump.seconds)}.`
-          : seekResult.error || "Queued jump could not seek yet."
+          ? `Jumped to ${formatSeconds(result.pendingJump.seconds)}`
+          : seekResult.error || "Queued jump could not seek yet",
+        seekResult.ok ? "success" : "error"
       );
     }
   }
 
   async function initOverlay() {
     // An orphaned copy of this script (from before an extension reload) may
-    // still have its overlay mounted; remove it before creating ours.
-    document.querySelectorAll(".scenemarks-overlay").forEach((staleHost) => staleHost.remove());
+    // still have its overlay or toast mounted; remove it before creating ours.
+    document.querySelectorAll(".scenemarks-overlay, .scenemarks-toast").forEach((staleNode) => staleNode.remove());
 
     overlay = SceneMarks.Overlay.createOverlay({
       getState: guard(getContextResponse),

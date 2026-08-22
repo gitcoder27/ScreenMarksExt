@@ -2,6 +2,9 @@
   const SceneMarks = root.SceneMarks || {};
   const { formatRange, formatSeconds } = SceneMarks.Time;
 
+  const TOAST_ICONS = Object.freeze({ success: "\u2713", error: "!", info: "\u2022" });
+  const TOAST_AUTO_HIDE_MS = 3200;
+
   function createElement(tagName, className, text) {
     const element = document.createElement(tagName);
     if (className) {
@@ -70,7 +73,11 @@
     const expandAllButton = createButton("scenemarks-overlay__mini-action", "Expand All", expandAllLibraryVideos);
     const collapseAllButton = createButton("scenemarks-overlay__mini-action", "Collapse All", collapseAllLibraryVideos);
     const libraryList = createElement("div", "scenemarks-overlay__library");
-    const toast = createElement("div", "scenemarks-overlay__toast");
+    // Lives outside the panel host so hotkey feedback stays visible even when
+    // the overlay itself is hidden.
+    const toast = createElement("div", "scenemarks-toast");
+    const toastIcon = createElement("span", "scenemarks-toast__icon");
+    const toastMessage = createElement("span", "scenemarks-toast__message");
     let pointerStart = null;
     let panelStart = null;
     let didDrag = false;
@@ -96,25 +103,39 @@
     libraryControls.append(randomVideoButton, favoritesButton, expandAllButton, collapseAllButton);
     libraryPanel.append(librarySearch, libraryControls, libraryList);
     body.append(tabs, currentPanel, libraryPanel);
-    host.append(header, body, toast);
+    host.append(header, body);
+
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    toast.title = "Dismiss";
+    toast.append(toastIcon, toastMessage);
+    document.documentElement.append(toast);
+    toast.addEventListener("click", hideToast);
 
     librarySearch.addEventListener("input", () => renderLibrary(latestState));
 
     async function handleQuickSave() {
       const result = await actions.quickSave();
-      showToast(result.ok ? "Scene saved." : result.error || "Could not save scene.");
+      if (result.ok && result.scene) {
+        showToast(`Saved ${formatSeconds(result.scene.startSeconds)}`, "success");
+      } else {
+        showToast(result.error || "Could not save", "error");
+      }
       await refresh();
     }
 
     async function handleToggleRange() {
       const result = await actions.toggleRange();
-      showToast(result.ok ? result.message || "Range updated." : result.error || "Could not update range.");
+      showToast(
+        result.ok ? result.message || "Range updated" : result.error || "Could not update range",
+        result.ok ? "success" : "error"
+      );
       await refresh();
     }
 
     async function handleRefresh() {
       await refresh();
-      showToast("Overlay refreshed.");
+      showToast("Overlay refreshed", "info");
     }
 
     function setViewMode(nextMode) {
@@ -136,11 +157,22 @@
       );
     }
 
-    function showToast(message) {
+    function hideToast() {
       root.clearTimeout(toastTimer);
-      toast.textContent = message;
+      toast.classList.remove("is-visible");
+    }
+
+    function showToast(message, type) {
+      const kind = type === "success" || type === "error" ? type : "info";
+      root.clearTimeout(toastTimer);
+      toast.className = `scenemarks-toast is-${kind}`;
+      toastIcon.textContent = TOAST_ICONS[kind];
+      toastMessage.textContent = message || "";
+      // Reading offsetWidth restarts the entrance transition when a new
+      // toast replaces one that is still visible.
+      void toast.offsetWidth;
       toast.classList.add("is-visible");
-      toastTimer = root.setTimeout(() => toast.classList.remove("is-visible"), 2600);
+      toastTimer = root.setTimeout(hideToast, TOAST_AUTO_HIDE_MS);
     }
 
     function setEnabled(enabled) {
@@ -156,6 +188,7 @@
     function destroy() {
       root.clearTimeout(toastTimer);
       host.remove();
+      toast.remove();
     }
 
     async function refresh() {
@@ -263,7 +296,7 @@
     async function handleRandomVideo() {
       const videos = getFilteredVideos(latestState);
       if (!videos.length) {
-        showToast("No saved scenes match.");
+        showToast("No saved scenes match", "info");
         return;
       }
 
@@ -276,7 +309,7 @@
 
       if (!result || !result.ok) {
         lastRandomPickKey = null;
-        showToast((result && result.error) || "Could not pick a random video.");
+        showToast((result && result.error) || "Could not pick a random video", "error");
         return;
       }
 
@@ -295,7 +328,7 @@
         group.addEventListener("animationend", () => group.classList.remove("is-random-pick"), { once: true });
       });
 
-      showToast(`Random pick: ${result.video.title || result.video.canonicalUrl || "saved video"}`);
+      showToast(`Random pick: ${result.video.title || result.video.canonicalUrl || "saved video"}`, "success");
     }
 
     function getFilteredVideos(state) {
@@ -402,9 +435,10 @@
         sceneId: scene.id,
         favorite: !scene.favorite
       });
-      showToast(result.ok
-        ? (scene.favorite ? "Timestamp unfavorited." : "Timestamp favorited.")
-        : result.error || "Could not update favorite.");
+      showToast(
+        result.ok ? (scene.favorite ? "Timestamp unfavorited" : "Timestamp favorited") : result.error || "Could not update favorite",
+        result.ok ? "success" : "error"
+      );
       await refresh();
     }
 
@@ -413,15 +447,16 @@
         videoKey: video.videoKey,
         favorite: !video.favorite
       });
-      showToast(result.ok
-        ? (video.favorite ? "Video unfavorited." : "Video favorited.")
-        : result.error || "Could not update favorite.");
+      showToast(
+        result.ok ? (video.favorite ? "Video unfavorited" : "Video favorited") : result.error || "Could not update favorite",
+        result.ok ? "success" : "error"
+      );
       await refresh();
     }
 
     async function removeScene(video, scene) {
       const result = await actions.deleteScene({ videoKey: video.videoKey, sceneId: scene.id });
-      showToast(result.ok ? "Scene deleted." : result.error || "Could not delete scene.");
+      showToast(result.ok ? "Scene deleted" : result.error || "Could not delete scene", result.ok ? "success" : "error");
       await refresh();
     }
 
@@ -430,10 +465,10 @@
         ? await actions.seekTo(scene.startSeconds)
         : await actions.openVideoAtScene(video, scene);
       const successMessage = isCurrentVideo
-        ? `Jumped to ${formatSeconds(scene.startSeconds)}.`
-        : "Opening video and queued timestamp jump.";
+        ? `Jumped to ${formatSeconds(scene.startSeconds)}`
+        : `Opening video at ${formatSeconds(scene.startSeconds)}`;
 
-      showToast(result.ok ? successMessage : result.error || "Could not jump.");
+      showToast(result.ok ? successMessage : result.error || "Could not jump", result.ok ? "success" : "error");
       await refresh();
     }
 

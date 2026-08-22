@@ -163,7 +163,7 @@
         duplicate: true,
         scene: duplicateScene,
         video: savedVideo || state.videos[normalizedIdentity.videoKey],
-        error: "A nearby scene already exists."
+        error: "A nearby scene already exists"
       };
     }
 

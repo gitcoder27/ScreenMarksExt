@@ -63,6 +63,8 @@ From the overlay you can:
 - Click the **x** button beside a scene to delete it.
 - Collapse the panel if you only want a small header.
 
+SceneMarks confirms actions (saves, jumps, favorites, errors) with a brief colored notification at the top center of the page. Green means success, red means an error occurred, and clicking a notification dismisses it immediately. Notifications appear even when the overlay itself is hidden.
+
 Queued timestamp jumps are stored briefly while the target page opens. Once SceneMarks detects the matching video page, it seeks to the selected timestamp and clears the queued jump. SceneMarks content scripts load on all pages (`<all_urls>`), so the overlay and queued jumps work on both supported streaming hosts and generic HTML5 video pages without opening the popup first.
 
 ## Hotkeys
