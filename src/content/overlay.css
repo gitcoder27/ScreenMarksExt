@@ -512,6 +512,7 @@
 .scenemarks-toast__message {
   all: initial;
   box-sizing: border-box;
+  color: inherit;
   display: inline-block;
   font-family: inherit;
   font-size: inherit;
