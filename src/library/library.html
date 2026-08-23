@@ -19,17 +19,12 @@
       </header>
 
       <section class="toolbar" aria-label="Library filters">
-        <label>
-          Search
-          <input id="searchInput" type="search" placeholder="Search title, note, or tag">
-        </label>
-        <label>
-          Platform
-          <select id="platformFilter"></select>
-        </label>
-        <label class="favorite-filter">
+        <input id="searchInput" type="search" placeholder="Search title, note, or tag" aria-label="Search title, note, or tag">
+        <select id="platformFilter" aria-label="Filter by platform"></select>
+        <label class="favorite-filter" title="Show favorites only">
           <input id="favoritesOnly" type="checkbox">
-          <span>Favorites only</span>
+          <span class="favorite-filter__star" aria-hidden="true">&#9733;</span>
+          <span>Favorites</span>
         </label>
         <div class="toolbar-actions" aria-label="Library expansion controls">
           <button id="randomVideoButton" type="button" title="Pick a random video (R)">Random</button>

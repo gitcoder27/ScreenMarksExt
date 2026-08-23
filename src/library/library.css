@@ -75,15 +75,31 @@ h1 {
 }
 
 .toolbar {
-  align-items: end;
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(220px, 1fr) 180px auto auto;
+  align-items: center;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(30, 41, 59, 0.88);
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(2, 6, 23, 0.35);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 14px;
-  padding: 14px;
+  padding: 10px;
+  position: sticky;
+  top: 10px;
+  z-index: 30;
+}
+
+.toolbar #searchInput {
+  flex: 1 1 220px;
+  min-width: 160px;
+}
+
+.toolbar #platformFilter {
+  flex: 0 0 auto;
+  padding: 0 10px;
 }
 
 label {
@@ -100,32 +116,76 @@ select {
   border: 1px solid #334155;
   border-radius: 7px;
   color: #e2e8f0;
-  min-height: 38px;
+  min-height: 36px;
   padding: 8px;
 }
 
 .favorite-filter {
   align-items: center;
-  display: flex;
-  min-height: 38px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  color: #cbd5e1;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 13px;
+  user-select: none;
+  white-space: nowrap;
 }
 
 .favorite-filter input {
-  height: 18px;
-  width: 18px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+}
+
+.favorite-filter__star {
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.favorite-filter:has(input:checked) {
+  background: rgba(250, 204, 21, 0.16);
+  border-color: rgba(250, 204, 21, 0.55);
+  color: #fde047;
+}
+
+.favorite-filter:has(input:checked) .favorite-filter__star {
+  color: #fde047;
+}
+
+.favorite-filter:focus-within {
+  outline: 3px solid #60a5fa;
+  outline-offset: 2px;
 }
 
 .toolbar-actions {
   display: flex;
   gap: 8px;
-  min-height: 38px;
+  margin-left: auto;
 }
 
 .toolbar-actions button {
   background: #334155;
+  border-radius: 999px;
   color: #e2e8f0;
   font-size: 12px;
-  padding: 8px 10px;
+  font-weight: 800;
+  min-height: 36px;
+  padding: 8px 13px;
+  white-space: nowrap;
+}
+
+.toolbar-actions button:first-child {
+  background: #facc15;
+  color: #111827;
 }
 
 .summary-box {
@@ -389,14 +449,21 @@ select {
 }
 
 @media (max-width: 780px) {
-  .toolbar,
   .video-card__header,
   .scene-row {
     grid-template-columns: 1fr;
   }
 
+  .toolbar {
+    top: 6px;
+  }
+
+  .toolbar #searchInput {
+    flex-basis: 100%;
+  }
+
   .toolbar-actions {
-    flex-direction: column;
+    margin-left: 0;
   }
 
   .library-header,
