@@ -137,6 +137,7 @@
 
   function render() {
     renderPlatformOptions();
+    const scrollY = window.scrollY;
     const videos = getFilteredVideos();
     const sceneCount = videos.reduce((total, video) => total + video.scenes.length, 0);
     const favoriteVideoCount = videos.filter((video) => video.favorite).length;
@@ -152,10 +153,16 @@
 
     if (!videos.length) {
       elements.libraryList.append(createElement("p", "empty-state", "No saved scenes match the current filters."));
-      return;
+    } else {
+      videos.forEach((video) => elements.libraryList.append(renderVideo(video)));
     }
 
-    videos.forEach((video) => elements.libraryList.append(renderVideo(video)));
+    // Rebuilding every card drops the browser's scroll anchor and can clamp
+    // the scroll offset while the list is momentarily shorter. Restore the
+    // position so re-renders (search, filters, deletes) stay in place.
+    if (window.scrollY !== scrollY) {
+      window.scrollTo(0, scrollY);
+    }
   }
 
   let lastRandomPickKey = null;
@@ -208,6 +215,10 @@
   }
 
   function handleLibraryKeydown(event) {
+    if (elements.confirmDialog.open) {
+      return;
+    }
+
     if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
       return;
     }
@@ -264,7 +275,7 @@
     actions.append(
       createFavoriteButton(video.favorite, "video", () => toggleVideoFavorite(video.videoKey, !video.favorite)),
       createButton("Open", () => openVideo(video)),
-      createButton("Delete Video", () => deleteVideo(video.videoKey))
+      createButton("Delete Video", () => deleteVideo(video))
     );
 
     details.append(platform, title, url);
@@ -290,7 +301,25 @@
       expandedVideoKeys.add(videoKey);
     }
 
-    render();
+    // Toggle the existing card in place: a full re-render here would drop the
+    // scroll position (and the clicked button's focus) every time.
+    const card = elements.libraryList.querySelector(`[data-video-key="${CSS.escape(videoKey)}"]`);
+    if (!card) {
+      render();
+      return;
+    }
+
+    const isCollapsed = !expandedVideoKeys.has(videoKey);
+    card.classList.toggle("is-collapsed", isCollapsed);
+
+    const titleButton = card.querySelector(".video-title-button");
+    if (titleButton) {
+      titleButton.setAttribute("aria-expanded", String(!isCollapsed));
+      const caret = titleButton.querySelector(".video-title-caret");
+      if (caret) {
+        caret.textContent = isCollapsed ? "+" : "-";
+      }
+    }
   }
 
   function renderScene(video, scene) {
@@ -311,7 +340,7 @@
       createFavoriteButton(scene.favorite, "timestamp", () => toggleFavorite(video.videoKey, scene)),
       createButton("Edit", () => editScene(video.videoKey, scene)),
       createButton("Copy Text", () => copyShareText(video, scene)),
-      createButton("Delete", () => deleteScene(video.videoKey, scene.id))
+      createButton("Delete", () => deleteScene(video, scene))
     );
 
     row.append(time, body, actions);
@@ -362,21 +391,60 @@
     });
   }
 
-  async function deleteVideo(videoKey) {
-    if (!confirm("Delete this video and all of its saved scenes?")) {
+  let pendingConfirmResolve = null;
+
+  function openConfirmDialog(options) {
+    elements.confirmDialogTitle.textContent = options.title;
+    elements.confirmDialogDescription.textContent = options.description || "";
+    elements.confirmDeleteButton.textContent = options.confirmLabel || "Delete";
+    elements.confirmDialog.showModal();
+
+    return new Promise((resolve) => {
+      pendingConfirmResolve = resolve;
+    });
+  }
+
+  function closeConfirmDialog(confirmed) {
+    if (!pendingConfirmResolve) {
       return;
     }
 
-    await Storage.deleteVideo(videoKey);
+    const resolve = pendingConfirmResolve;
+    pendingConfirmResolve = null;
+    elements.confirmDialog.close();
+    resolve(confirmed);
+  }
+
+  async function deleteVideo(video) {
+    const title = video.title || video.canonicalUrl || video.videoKey;
+    const sceneWord = video.scenes.length === 1 ? "scene" : "scenes";
+    const confirmed = await openConfirmDialog({
+      title: "Delete this video?",
+      description: `"${title}" and its ${video.scenes.length} saved ${sceneWord} will be removed from your library. This cannot be undone.`,
+      confirmLabel: "Delete Video"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    await Storage.deleteVideo(video.videoKey);
     await loadState();
   }
 
-  async function deleteScene(videoKey, sceneId) {
-    if (!confirm("Delete this saved scene?")) {
+  async function deleteScene(video, scene) {
+    const note = scene.note ? ` \u2014 "${scene.note}"` : "";
+    const confirmed = await openConfirmDialog({
+      title: "Delete this timestamp?",
+      description: `${formatRange(scene.startSeconds, scene.endSeconds)}${note} will be removed from "${video.title || video.canonicalUrl || video.videoKey}". This cannot be undone.`,
+      confirmLabel: "Delete Timestamp"
+    });
+
+    if (!confirmed) {
       return;
     }
 
-    await Storage.deleteScene(videoKey, sceneId);
+    await Storage.deleteScene(video.videoKey, scene.id);
     await loadState();
   }
 
@@ -487,7 +555,12 @@
       "summaryBox",
       "libraryList",
       "exportButton",
-      "importInput"
+      "importInput",
+      "confirmDialog",
+      "confirmDialogTitle",
+      "confirmDialogDescription",
+      "confirmCancelButton",
+      "confirmDeleteButton"
     ].forEach((id) => {
       elements[id] = byId(id);
     });
@@ -503,6 +576,14 @@
     elements.collapseAllButton.addEventListener("click", collapseAllVideos);
     elements.exportButton.addEventListener("click", exportData);
     elements.importInput.addEventListener("change", () => importData(elements.importInput.files[0]));
+    elements.confirmCancelButton.addEventListener("click", () => closeConfirmDialog(false));
+    elements.confirmDeleteButton.addEventListener("click", () => closeConfirmDialog(true));
+    elements.confirmDialog.addEventListener("cancel", (event) => {
+      // Esc fires the native "cancel"; resolve it through the same path
+      // as the Cancel button instead of leaving the promise pending.
+      event.preventDefault();
+      closeConfirmDialog(false);
+    });
     document.addEventListener("keydown", handleLibraryKeydown);
   }
 
