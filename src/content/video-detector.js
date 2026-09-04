@@ -123,6 +123,7 @@
 
   function createVideoDetector(options) {
     const onContextChange = options && options.onContextChange;
+    const onPlaybackTick = options && options.onPlaybackTick;
     let activeVideo = null;
     let observer = null;
     let scanTimer = null;
@@ -151,11 +152,22 @@
       onContextChange(snapshot);
     }
 
+    // Unlike notify() this fires on every media event so consumers can track
+    // the playback position; consumers are expected to dedupe cheaply.
+    function notifyTick() {
+      if (typeof onPlaybackTick !== "function" || !activeVideo) {
+        return;
+      }
+
+      onPlaybackTick(activeVideo.currentTime);
+    }
+
     function bindVideo(video) {
       if (activeVideo !== video) {
         if (activeVideo) {
           mediaEvents.forEach((eventName) => {
             activeVideo.removeEventListener(eventName, notify);
+            activeVideo.removeEventListener(eventName, notifyTick);
           });
         }
 
@@ -163,6 +175,7 @@
         if (video) {
           mediaEvents.forEach((eventName) => {
             video.addEventListener(eventName, notify, { passive: true });
+            video.addEventListener(eventName, notifyTick, { passive: true });
           });
         }
       }
@@ -234,6 +247,7 @@
       if (activeVideo) {
         mediaEvents.forEach((eventName) => {
           activeVideo.removeEventListener(eventName, notify);
+          activeVideo.removeEventListener(eventName, notifyTick);
         });
       }
       root.removeEventListener("resize", scheduleScan);

@@ -272,6 +272,14 @@
   gap: 8px;
   grid-template-columns: minmax(0, 1fr) auto;
   padding: 7px;
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.scenemarks-overlay__scene.is-active {
+  background: #334155;
+  border-color: #facc15;
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.3);
+  scroll-margin: 6px 0;
 }
 
 .scenemarks-overlay__video {

@@ -4,6 +4,9 @@
 
   const TOAST_ICONS = Object.freeze({ success: "\u2713", error: "!", info: "\u2022" });
   const TOAST_AUTO_HIDE_MS = 3200;
+  // After the user scrolls or presses on the current-scene list, auto-scroll
+  // to the highlighted row stays off this long so browsing is not interrupted.
+  const AUTO_SCROLL_SUPPRESSION_MS = 8000;
 
   function createElement(tagName, className, text) {
     const element = document.createElement(tagName);
@@ -88,6 +91,12 @@
     let lastRandomPickKey = null;
     let favoritesOnly = false;
     const expandedVideoKeys = new Set();
+    // Playback-follow state for the Current tab. Updated by the lightweight
+    // detector tick (updatePlaybackTime); never touches storage or rebuilds.
+    let latestPlaybackSeconds = null;
+    let activeHighlightRow = null;
+    let suppressAutoScrollUntil = 0;
+    let autoScrollPaused = false;
 
     host.setAttribute("aria-label", "SceneMarks saved scene overlay");
     header.title = "Drag SceneMarks panel";
@@ -113,6 +122,13 @@
     toast.addEventListener("click", hideToast);
 
     librarySearch.addEventListener("input", () => renderLibrary(latestState));
+
+    function armAutoScrollSuppression() {
+      suppressAutoScrollUntil = Date.now() + AUTO_SCROLL_SUPPRESSION_MS;
+    }
+
+    currentSceneList.addEventListener("pointerdown", armAutoScrollSuppression, { passive: true });
+    currentSceneList.addEventListener("wheel", armAutoScrollSuppression, { passive: true });
 
     async function handleQuickSave() {
       const result = await actions.quickSave();
@@ -145,6 +161,9 @@
       currentPanel.hidden = viewMode !== "current";
       libraryPanel.hidden = viewMode !== "library";
       renderHeader(latestState);
+      if (viewMode === "current") {
+        applyCurrentHighlight();
+      }
     }
 
     function toggleCollapse() {
@@ -155,6 +174,9 @@
         "aria-label",
         isCollapsed ? "Expand SceneMarks overlay" : "Collapse SceneMarks overlay"
       );
+      if (!isCollapsed) {
+        applyCurrentHighlight();
+      }
     }
 
     function hideToast() {
@@ -202,6 +224,11 @@
 
     function render(state) {
       latestState = state;
+      const context = state && state.context;
+      if (context && context.detected && Number.isFinite(context.currentTimeSeconds)) {
+        latestPlaybackSeconds = context.currentTimeSeconds;
+      }
+
       renderHeader(state);
       renderStatus(state);
       renderCurrentScenes(state);
@@ -249,12 +276,107 @@
 
       if (!scenes.length) {
         currentSceneList.append(createElement("p", "scenemarks-overlay__empty", "No saved timestamps for this video."));
+        applyCurrentHighlight();
         return;
       }
 
       scenes.forEach((scene) => {
         currentSceneList.append(renderSceneRow({ scene, video: state.video, isCurrentVideo: true }));
       });
+
+      applyCurrentHighlight();
+    }
+
+    // Picks the scene the Current tab should spotlight for a playback position:
+    // a saved range that contains it wins, otherwise the most recent timestamp
+    // at or before it. Scenes arrive sorted by startSeconds, so the first
+    // scene past the position ends the search.
+    function findActiveScene(scenes, seconds) {
+      let active = null;
+
+      for (const scene of scenes) {
+        if (scene.startSeconds > seconds) {
+          break;
+        }
+
+        if (scene.endSeconds !== null && seconds <= scene.endSeconds) {
+          return scene;
+        }
+
+        active = scene;
+      }
+
+      return active;
+    }
+
+    // Lightweight per-tick update driven by the video detector. Only toggles
+    // the highlight class and occasionally scrolls; never reads storage and
+    // never rebuilds the list.
+    function updatePlaybackTime(seconds) {
+      const time = Number(seconds);
+      if (!Number.isFinite(time)) {
+        return;
+      }
+
+      latestPlaybackSeconds = time;
+
+      if (host.hidden || isCollapsed || viewMode !== "current") {
+        // Arm a one-time re-sync so the list follows playback again on the
+        // first tick after the Current view becomes visible.
+        autoScrollPaused = true;
+        return;
+      }
+
+      applyCurrentHighlight({ allowAutoScroll: true });
+    }
+
+    // Re-applies the highlight class to the freshly rendered rows. Auto-scroll
+    // is left to the tick path so refreshes never yank the list.
+    function applyCurrentHighlight(options) {
+      const allowAutoScroll = Boolean(options && options.allowAutoScroll);
+      if (host.hidden || isCollapsed || viewMode !== "current") {
+        return;
+      }
+
+      const scenes = latestState && Array.isArray(latestState.scenes) ? latestState.scenes : [];
+      const active = latestPlaybackSeconds !== null && scenes.length
+        ? findActiveScene(scenes, latestPlaybackSeconds)
+        : null;
+      const nextRow = active
+        ? currentSceneList.querySelector(`[data-scene-id="${CSS.escape(active.id)}"]`)
+        : null;
+      const rowChanged = nextRow !== activeHighlightRow;
+
+      if (rowChanged) {
+        if (activeHighlightRow) {
+          activeHighlightRow.classList.remove("is-active");
+        }
+
+        activeHighlightRow = nextRow;
+
+        if (nextRow) {
+          nextRow.classList.add("is-active");
+        }
+      }
+
+      if (!allowAutoScroll || !nextRow) {
+        return;
+      }
+
+      if (Date.now() < suppressAutoScrollUntil) {
+        autoScrollPaused = true;
+        return;
+      }
+
+      // While the highlighted scene is unchanged the row is already settled,
+      // so scrolling is skipped; the one exception is right after a
+      // suppression window lifts, which re-syncs the list with playback once.
+      if (!rowChanged && !autoScrollPaused) {
+        return;
+      }
+
+      autoScrollPaused = false;
+      nextRow.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
 
     function renderLibrary(state) {
@@ -413,6 +535,7 @@
 
     function renderSceneRow({ scene, video, isCurrentVideo }) {
       const row = createElement("div", "scenemarks-overlay__scene");
+      row.dataset.sceneId = scene.id;
       const main = createElement("div", "scenemarks-overlay__scene-main");
       const time = createElement("span", "scenemarks-overlay__scene-time", formatRange(scene.startSeconds, scene.endSeconds));
       const note = createElement("span", "scenemarks-overlay__scene-note", scene.note || "Saved timestamp");
@@ -526,6 +649,7 @@
       render,
       setEnabled,
       showToast,
+      updatePlaybackTime,
       getLatestState: () => latestState
     };
   }

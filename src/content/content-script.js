@@ -88,6 +88,11 @@
     onContextChange: () => {
       scheduleOverlayRefresh(1000);
       schedulePendingJumpCheck(500);
+    },
+    onPlaybackTick: (seconds) => {
+      if (overlay && !isContextDead()) {
+        overlay.updatePlaybackTime(seconds);
+      }
     }
   });
 

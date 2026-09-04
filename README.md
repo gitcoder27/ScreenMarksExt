@@ -52,7 +52,7 @@ From the overlay you can:
 
 - Save the current timestamp.
 - Start or end a scene range.
-- See saved timestamps/ranges for the current video in **Current** view, and star any of them with the star button.
+- See saved timestamps/ranges for the current video in **Current** view, and star any of them with the star button. While the video plays, the timestamp you have most recently passed stays highlighted (a saved range is highlighted while playback is inside it), and the list auto-scrolls to keep that row in view. Scrolling or pressing on the list pauses the auto-scroll for a few seconds so you can browse freely.
 - Search all saved videos and scenes in **Library** view, and star any video from its group header.
 - Toggle **Favorites** in Library view to show only favorited videos and favorited timestamps. A video appears when it is favorited itself or has at least one favorited timestamp.
 - Pick a random saved video with the **Random** button. Random picks from whatever the current search and favorites filters match, so toggle **Favorites** first to shuffle within your favorites. Videos already open in a tab of the current window are never picked, so repeated picks keep surfacing videos you have not opened yet.
