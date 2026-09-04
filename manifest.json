@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SceneMarks",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Save and revisit local timestamp bookmarks for streaming videos.",
   "icons": {
     "16": "assets/icons/icon-16.png",

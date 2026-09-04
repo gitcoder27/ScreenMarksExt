@@ -60,10 +60,10 @@ From the overlay you can:
 - Click **Jump** for the current video to seek immediately.
 - Click **Jump** for another saved video to open that video page and queue the timestamp jump.
 - Click the star beside a scene or video to favorite or unfavorite it.
-- Click the **x** button beside a scene to delete it.
+- Click the **x** button beside a scene to delete it with a two-step confirm: the first click arms the row (it turns red and the x becomes a check), and clicking the same button again deletes. Clicking anything else, pressing `Escape`, or waiting a few seconds cancels the armed delete.
 - Collapse the panel if you only want a small header.
 
-SceneMarks confirms actions (saves, jumps, favorites, errors) with a brief colored notification at the top center of the page. Green means success, red means an error occurred, and clicking a notification dismisses it immediately. Notifications appear even when the overlay itself is hidden.
+SceneMarks confirms actions (saves, jumps, favorites, errors) with a brief colored notification at the top center of the page. Green means success, red means an error occurred, and clicking a notification dismisses it immediately. Notifications appear even when the overlay itself is hidden, and they render above fullscreen players too.
 
 Queued timestamp jumps are stored briefly while the target page opens. Once SceneMarks detects the matching video page, it seeks to the selected timestamp and clears the queued jump. SceneMarks content scripts load on all pages (`<all_urls>`), so the overlay and queued jumps work on both supported streaming hosts and generic HTML5 video pages without opening the popup first.
 
@@ -86,7 +86,7 @@ Default page hotkeys:
 - `Alt+Shift+M`: mark range start/end (toggle).
 - `Alt+Shift+A`: mark range start only.
 - `Alt+Shift+D`: mark range end only.
-- `Alt+Shift+N`: jump to the next saved timestamp for the current video. Press repeatedly to rotate through all saved timestamps from the beginning.
+- `Alt+Shift+N`: jump to the next saved timestamp for the current video. Press repeatedly to rotate through all saved timestamps from the beginning. The confirmation toast shows where you landed among the video's saved scenes, e.g. `Jumped to 04:12 (4/10)`; the backwards hotkey shows the same counter.
 - `Alt+Shift+B`: jump back through saved timestamps for the current video. It skips the most recent previous timestamp — the one you just jumped to or are still near — and lands on the one before it, so repeated presses keep cycling backwards instead of re-landing on the same timestamp while playback moves on. At the first saved timestamp it wraps to the last one.
 - `Alt+Shift+R`: open a random video from the library. Videos already open in a tab of the current window are never picked, so repeated jumps keep surfacing videos you have not opened yet. Query strings and tracking parameters are ignored when matching open tabs, so player URLs with different tracking noise still count as already open (YouTube video ids are preserved, since they live in the URL query). The library page and overlay Random buttons use the same matching.
 - `Alt+Shift+O`: show or hide the overlay panel.

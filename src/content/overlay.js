@@ -4,6 +4,12 @@
 
   const TOAST_ICONS = Object.freeze({ success: "\u2713", error: "!", info: "\u2022" });
   const TOAST_AUTO_HIDE_MS = 3200;
+  // A beat longer than the 180ms toast fade so the exit transition finishes
+  // before the toast leaves the top layer.
+  const TOAST_FADE_MS = 200;
+  // An armed delete reverts on its own so a much later second click can never
+  // delete a row the user armed and forgot about.
+  const ARMED_DELETE_TIMEOUT_MS = 5000;
   // After the user scrolls or presses on the current-scene list, auto-scroll
   // to the highlighted row stays off this long so browsing is not interrupted.
   const AUTO_SCROLL_SUPPRESSION_MS = 8000;
@@ -86,6 +92,14 @@
     let didDrag = false;
     let isCollapsed = false;
     let toastTimer = null;
+    let toastLayerTimer = null;
+    // The Popover API lifts toasts above fullscreen players; without it the
+    // plain fixed-position toast still works outside fullscreen.
+    const supportsToastPopover = typeof toast.showPopover === "function";
+    // Two-step delete state: which scene's delete button is armed, plus its
+    // auto-disarm timer.
+    let armedDelete = null;
+    let armedDeleteTimer = null;
     let latestState = null;
     let viewMode = "current";
     let lastRandomPickKey = null;
@@ -116,6 +130,11 @@
 
     toast.setAttribute("role", "status");
     toast.setAttribute("aria-live", "polite");
+    // popover=manual lets showToast() move the toast into the top layer, the
+    // only surface rendered above a fullscreen player. Visibility stays
+    // driven by the is-visible class, and the all:initial CSS reset already
+    // overrides the popover user-agent styles.
+    toast.setAttribute("popover", "manual");
     toast.title = "Dismiss";
     toast.append(toastIcon, toastMessage);
     document.documentElement.append(toast);
@@ -179,14 +198,51 @@
       }
     }
 
+    // Fullscreen players render only the fullscreen element, which paints
+    // above top-layer entries inserted before it. Re-showing the popover on
+    // every toast re-inserts it at the end of that order, so it stays visible
+    // even over a player that entered fullscreen after the previous toast.
+    function raiseToastLayer() {
+      if (!supportsToastPopover) {
+        return;
+      }
+
+      try {
+        if (toast.matches(":popover-open")) {
+          toast.hidePopover();
+        }
+        toast.showPopover();
+      } catch (_error) {
+        // The toast still shows on normal pages without the top layer.
+      }
+    }
+
+    function lowerToastLayer() {
+      if (!supportsToastPopover) {
+        return;
+      }
+
+      try {
+        if (toast.matches(":popover-open")) {
+          toast.hidePopover();
+        }
+      } catch (_error) {
+        // Leaving the toast in the top layer is harmless.
+      }
+    }
+
     function hideToast() {
       root.clearTimeout(toastTimer);
+      root.clearTimeout(toastLayerTimer);
       toast.classList.remove("is-visible");
+      toastLayerTimer = root.setTimeout(lowerToastLayer, TOAST_FADE_MS);
     }
 
     function showToast(message, type) {
       const kind = type === "success" || type === "error" ? type : "info";
       root.clearTimeout(toastTimer);
+      root.clearTimeout(toastLayerTimer);
+      raiseToastLayer();
       toast.className = `scenemarks-toast is-${kind}`;
       toastIcon.textContent = TOAST_ICONS[kind];
       toastMessage.textContent = message || "";
@@ -209,6 +265,12 @@
 
     function destroy() {
       root.clearTimeout(toastTimer);
+      root.clearTimeout(toastLayerTimer);
+      root.clearTimeout(armedDeleteTimer);
+      armedDelete = null;
+      lowerToastLayer();
+      document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
+      document.removeEventListener("keydown", handleDocumentKeyDown, true);
       host.remove();
       toast.remove();
     }
@@ -276,6 +338,7 @@
 
       if (!scenes.length) {
         currentSceneList.append(createElement("p", "scenemarks-overlay__empty", "No saved timestamps for this video."));
+        armedDelete = null;
         applyCurrentHighlight();
         return;
       }
@@ -284,6 +347,7 @@
         currentSceneList.append(renderSceneRow({ scene, video: state.video, isCurrentVideo: true }));
       });
 
+      syncArmedDeleteRow();
       applyCurrentHighlight();
     }
 
@@ -536,16 +600,18 @@
     function renderSceneRow({ scene, video, isCurrentVideo }) {
       const row = createElement("div", "scenemarks-overlay__scene");
       row.dataset.sceneId = scene.id;
+      row.dataset.videoKey = video.videoKey;
       const main = createElement("div", "scenemarks-overlay__scene-main");
       const time = createElement("span", "scenemarks-overlay__scene-time", formatRange(scene.startSeconds, scene.endSeconds));
       const note = createElement("span", "scenemarks-overlay__scene-note", scene.note || "Saved timestamp");
       const rowActions = createElement("div", "scenemarks-overlay__scene-actions");
       const jump = createButton("scenemarks-overlay__jump", "Jump", () => jumpToScene(video, scene, isCurrentVideo));
       const favorite = createFavoriteButton(scene.favorite, "timestamp", () => toggleSceneFavorite(video, scene));
-      const remove = createButton("scenemarks-overlay__delete", "\u00d7", () => removeScene(video, scene));
+      const remove = createButton("scenemarks-overlay__delete", "\u00d7", () => handleDeletePress(video, scene, remove));
 
+      remove.dataset.label = `Delete scene at ${formatRange(scene.startSeconds, scene.endSeconds)}`;
       remove.title = "Delete scene";
-      remove.setAttribute("aria-label", `Delete scene at ${formatRange(scene.startSeconds, scene.endSeconds)}`);
+      remove.setAttribute("aria-label", remove.dataset.label);
       rowActions.append(jump, favorite, remove);
       main.append(time, note);
       row.append(main, rowActions);
@@ -582,6 +648,100 @@
       showToast(result.ok ? "Scene deleted" : result.error || "Could not delete scene", result.ok ? "success" : "error");
       await refresh();
     }
+
+    // Two-step delete: the first press arms the row (red highlight, the x
+    // becomes a confirm check) and only a second press on that same button
+    // deletes. Pressing anything else, Escape, or the timeout disarms.
+    function styleArmedDeleteRow(row, armed) {
+      const button = row.querySelector(".scenemarks-overlay__delete");
+      row.classList.toggle("is-armed", armed);
+      button.classList.toggle("is-armed", armed);
+      button.textContent = armed ? "\u2713" : "\u00d7";
+      button.title = armed ? "Click again to delete" : "Delete scene";
+      button.setAttribute("aria-label", armed ? "Click again to confirm delete" : button.dataset.label || "Delete scene");
+    }
+
+    function findSceneRow(sceneId) {
+      return host.querySelector(`[data-scene-id="${CSS.escape(sceneId)}"]`);
+    }
+
+    function armDelete(videoKey, sceneId, row) {
+      if (armedDelete && armedDelete.sceneId !== sceneId) {
+        const previousRow = findSceneRow(armedDelete.sceneId);
+        if (previousRow) {
+          styleArmedDeleteRow(previousRow, false);
+        }
+      }
+
+      armedDelete = { sceneId, videoKey };
+      styleArmedDeleteRow(row, true);
+      root.clearTimeout(armedDeleteTimer);
+      armedDeleteTimer = root.setTimeout(disarmDelete, ARMED_DELETE_TIMEOUT_MS);
+    }
+
+    function disarmDelete() {
+      root.clearTimeout(armedDeleteTimer);
+      armedDeleteTimer = null;
+      if (!armedDelete) {
+        return;
+      }
+
+      const row = findSceneRow(armedDelete.sceneId);
+      if (row) {
+        styleArmedDeleteRow(row, false);
+      }
+      armedDelete = null;
+    }
+
+    function handleDeletePress(video, scene, button) {
+      if (armedDelete && armedDelete.sceneId === scene.id && armedDelete.videoKey === video.videoKey) {
+        disarmDelete();
+        removeScene(video, scene);
+        return;
+      }
+
+      armDelete(video.videoKey, scene.id, button.closest(".scenemarks-overlay__scene"));
+    }
+
+    // Refreshes rebuild every row, so the armed styling is re-applied by
+    // scene id after each render. A stale arm (scene deleted, or the video
+    // context moved on) disarms instead of letting a later click delete.
+    function syncArmedDeleteRow() {
+      if (!armedDelete) {
+        return;
+      }
+
+      const row = findSceneRow(armedDelete.sceneId);
+      if (!row || row.dataset.videoKey !== armedDelete.videoKey) {
+        armedDelete = null;
+        return;
+      }
+
+      styleArmedDeleteRow(row, true);
+    }
+
+    function handleDocumentPointerDown(event) {
+      if (!armedDelete) {
+        return;
+      }
+
+      const target = event.target;
+      const row = target instanceof Element ? target.closest(".scenemarks-overlay__scene") : null;
+      if (row && target.closest(".scenemarks-overlay__delete") && row.dataset.sceneId === armedDelete.sceneId) {
+        return;
+      }
+
+      disarmDelete();
+    }
+
+    function handleDocumentKeyDown(event) {
+      if (event.key === "Escape") {
+        disarmDelete();
+      }
+    }
+
+    document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+    document.addEventListener("keydown", handleDocumentKeyDown, true);
 
     async function jumpToScene(video, scene, isCurrentVideo) {
       const result = isCurrentVideo

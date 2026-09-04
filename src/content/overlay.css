@@ -282,6 +282,15 @@
   scroll-margin: 6px 0;
 }
 
+/* Armed for delete (two-step delete): placed after .is-active so the danger
+   styling wins when a row is both highlighted and armed. */
+.scenemarks-overlay__scene.is-armed {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.7);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.35);
+  scroll-margin: 6px 0;
+}
+
 .scenemarks-overlay__video {
   all: initial;
   background: #1e293b;
@@ -458,12 +467,31 @@
   font-size: 14px;
   height: 24px;
   padding: 0;
+  transition: background-color 150ms ease, color 150ms ease;
   width: 24px;
 }
 
 .scenemarks-overlay__delete:hover {
   background: rgba(239, 68, 68, 0.18);
   color: #fca5a5;
+}
+
+/* Second step of the two-step delete: solid confirm button, pulsing so the
+   eye is drawn to exactly what the next click removes. After the hover rule
+   on purpose, so the armed look wins even while hovered. */
+.scenemarks-overlay__delete.is-armed {
+  background: #ef4444;
+  color: #ffffff;
+  animation: scenemarks-armed-delete-pulse 1.5s ease-out infinite;
+}
+
+.scenemarks-overlay__delete.is-armed:hover {
+  background: #dc2626;
+}
+
+@keyframes scenemarks-armed-delete-pulse {
+  from { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45); }
+  to { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
 }
 
 .scenemarks-overlay__icon:focus-visible,
@@ -481,7 +509,10 @@
 }
 
 /* Page-level toast: lives outside .scenemarks-overlay so hotkey feedback
-   stays visible even when the panel is hidden. */
+   stays visible even when the panel is hidden. The element also carries
+   popover="manual" (see overlay.js) so showToast can lift it into the top
+   layer above fullscreen players; the all:initial reset already overrides
+   every popover user-agent style, so no popover-specific rules are needed. */
 .scenemarks-toast {
   all: initial;
   align-items: center;

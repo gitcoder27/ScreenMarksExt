@@ -299,6 +299,12 @@
     return startRange(payload);
   }
 
+  // Jump feedback includes where you landed among the video's saved scenes
+  // (the exact set the hotkeys cycle through), e.g. "Jumped to 04:12 (4/10)".
+  function jumpMessage(scene, index, total) {
+    return `Jumped to ${formatSeconds(scene.startSeconds)} (${index + 1}/${total})`;
+  }
+
   async function jumpToNextScene() {
     const detected = requireDetectedVideo();
     if (!detected.ok) {
@@ -311,11 +317,12 @@
     }
 
     const currentSeconds = detected.snapshot.currentTimeSeconds;
-    const nextScene = scenes.find((scene) => scene.startSeconds > currentSeconds + 0.1) || scenes[0];
+    const nextIndex = scenes.findIndex((scene) => scene.startSeconds > currentSeconds + 0.1);
+    const nextScene = nextIndex >= 0 ? scenes[nextIndex] : scenes[0];
     const result = await seekTo({ seconds: nextScene.startSeconds });
 
     return result.ok
-      ? { ok: true, message: `Jumped to ${formatSeconds(nextScene.startSeconds)}` }
+      ? { ok: true, message: jumpMessage(nextScene, Math.max(nextIndex, 0), scenes.length) }
       : result;
   }
 
@@ -346,11 +353,12 @@
       }
     }
 
-    const previousScene = anchorIndex >= 1 ? scenes[anchorIndex - 1] : scenes[scenes.length - 1];
+    const previousIndex = anchorIndex >= 1 ? anchorIndex - 1 : scenes.length - 1;
+    const previousScene = scenes[previousIndex];
     const result = await seekTo({ seconds: previousScene.startSeconds });
 
     return result.ok
-      ? { ok: true, message: `Jumped to ${formatSeconds(previousScene.startSeconds)}` }
+      ? { ok: true, message: jumpMessage(previousScene, previousIndex, scenes.length) }
       : result;
   }
 
