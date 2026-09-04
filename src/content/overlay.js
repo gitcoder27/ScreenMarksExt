@@ -1,5 +1,6 @@
 (function attachOverlay(root) {
   const SceneMarks = root.SceneMarks || {};
+  const { ARMED_DELETE_TIMEOUT_MS } = SceneMarks.Constants;
   const { formatRange, formatSeconds } = SceneMarks.Time;
 
   const TOAST_ICONS = Object.freeze({ success: "\u2713", error: "!", info: "\u2022" });
@@ -7,9 +8,6 @@
   // A beat longer than the 180ms toast fade so the exit transition finishes
   // before the toast leaves the top layer.
   const TOAST_FADE_MS = 200;
-  // An armed delete reverts on its own so a much later second click can never
-  // delete a row the user armed and forgot about.
-  const ARMED_DELETE_TIMEOUT_MS = 5000;
   // After the user scrolls or presses on the current-scene list, auto-scroll
   // to the highlighted row stays off this long so browsing is not interrupted.
   const AUTO_SCROLL_SUPPRESSION_MS = 8000;

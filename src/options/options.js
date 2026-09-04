@@ -7,6 +7,38 @@
     return document.getElementById(id);
   }
 
+  // chrome.storage.local quota for MV3 extensions; the API offers no way to
+  // query it, so the meter is measured against this documented limit.
+  const LOCAL_STORAGE_QUOTA_BYTES = 10 * 1024 * 1024;
+
+  function formatBytes(bytes) {
+    if (bytes >= 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+    if (bytes >= 1024) {
+      return `${Math.round(bytes / 1024)} KB`;
+    }
+    return `${bytes} B`;
+  }
+
+  async function updateStorageMeter() {
+    let usedBytes;
+    try {
+      usedBytes = await chrome.storage.local.getBytesInUse(null);
+    } catch (_error) {
+      elements.storageMeterLabel.textContent = "Storage usage is unavailable in this browser.";
+      return;
+    }
+
+    const percent = Math.min(100, Math.round((usedBytes / LOCAL_STORAGE_QUOTA_BYTES) * 100));
+    elements.storageMeterFill.style.width = `${percent}%`;
+    elements.storageMeterBar.setAttribute("aria-valuenow", String(percent));
+    elements.storageMeterLabel.textContent =
+      `${formatBytes(usedBytes)} of about ${formatBytes(LOCAL_STORAGE_QUOTA_BYTES)} used (${percent}%)`;
+    elements.storageMeterFill.classList.toggle("is-warning", percent >= 75);
+    elements.storageMeterFill.classList.toggle("is-danger", percent >= 90);
+  }
+
   function bindElements() {
     [
       "openLibraryButton",
@@ -28,6 +60,9 @@
       "openLibraryHotkey",
       "openBrowserShortcutsButton",
       "clearDataButton",
+      "storageMeterBar",
+      "storageMeterFill",
+      "storageMeterLabel",
       "statusMessage"
     ].forEach((id) => {
       elements[id] = byId(id);
@@ -162,6 +197,7 @@
 
     await Storage.clearAllData();
     await loadSettings();
+    await updateStorageMeter();
     setStatus("All SceneMarks data cleared.", false);
   }
 
@@ -183,5 +219,6 @@
     bindElements();
     bindEvents();
     await loadSettings();
+    await updateStorageMeter();
   });
 })();

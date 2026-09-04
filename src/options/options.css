@@ -146,6 +146,39 @@ select {
   color: #fee2e2;
 }
 
+.storage-meter {
+  margin: 12px 0;
+}
+
+.storage-meter__bar {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  height: 10px;
+  overflow: hidden;
+}
+
+.storage-meter__fill {
+  background: #4ade80;
+  height: 100%;
+  transition: width 300ms ease, background-color 300ms ease;
+  width: 0;
+}
+
+.storage-meter__fill.is-warning {
+  background: #facc15;
+}
+
+.storage-meter__fill.is-danger {
+  background: #ef4444;
+}
+
+.storage-meter__label {
+  color: #94a3b8;
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
 .form-footer {
   align-items: center;
   display: flex;

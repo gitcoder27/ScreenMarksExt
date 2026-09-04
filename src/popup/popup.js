@@ -1,11 +1,15 @@
 (function initializePopup() {
-  const { MESSAGE_TYPES } = SceneMarks.Constants;
+  const { ARMED_DELETE_TIMEOUT_MS, MESSAGE_TYPES } = SceneMarks.Constants;
   const { formatRange, formatSeconds } = SceneMarks.Time;
   const Storage = SceneMarks.Storage;
   const elements = {};
   let latestContext = null;
   let latestSettings = null;
   let pendingDialogResolve = null;
+  // Two-step delete state: which scene's delete button is armed, plus its
+  // auto-disarm timer.
+  let armedDelete = null;
+  let armedDeleteTimer = null;
 
   function byId(id) {
     return document.getElementById(id);
@@ -64,6 +68,14 @@
     button.setAttribute("aria-label", button.title);
     button.setAttribute("aria-pressed", String(Boolean(isFavorite)));
     button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function createDeleteButton(videoKey, scene) {
+    const button = createButton("Delete", () => handleDeletePress(videoKey, scene, button));
+    button.className = "scene-delete";
+    button.title = "Delete this saved scene";
+    button.setAttribute("aria-label", button.title);
     return button;
   }
 
@@ -190,12 +202,14 @@
         ? "No scenes saved for this video yet."
         : "Saved scenes appear here after a video is detected.";
       elements.sceneList.append(empty);
+      armedDelete = null;
       return;
     }
 
     scenes.forEach((scene) => {
       const row = document.createElement("article");
       row.className = "scene-row";
+      row.dataset.sceneId = scene.id;
 
       const top = document.createElement("div");
       top.className = "scene-row__top";
@@ -224,11 +238,13 @@
         createButton("Jump", () => jumpToScene(scene)),
         createFavoriteButton(scene.favorite, () => toggleSceneFavorite(context.videoKey, scene)),
         createButton("Edit", () => editScene(context.videoKey, scene)),
-        createButton("Delete", () => deleteScene(context.videoKey, scene.id))
+        createDeleteButton(context.videoKey, scene)
       );
       row.append(actions);
       elements.sceneList.append(row);
     });
+
+    syncArmedDelete();
   }
 
   async function toggleSceneFavorite(videoKey, scene) {
@@ -380,11 +396,75 @@
     await refreshContext();
   }
 
-  async function deleteScene(videoKey, sceneId) {
-    if (!confirm("Delete this saved scene?")) {
+  // Two-step delete, matching the overlay: the first press arms the button
+  // (red "Confirm?") and only a second press on that same button deletes.
+  // Pressing anything else, Escape, or the timeout disarms.
+  function styleArmedDeleteButton(button, armed) {
+    button.classList.toggle("is-armed", armed);
+    button.textContent = armed ? "Confirm?" : "Delete";
+    button.title = armed ? "Click again to delete this scene" : "Delete this saved scene";
+    button.setAttribute("aria-label", button.title);
+  }
+
+  function findDeleteButton(sceneId) {
+    return elements.sceneList.querySelector(`[data-scene-id="${CSS.escape(sceneId)}"] .scene-delete`);
+  }
+
+  function armDelete(videoKey, sceneId, button) {
+    if (armedDelete && armedDelete.sceneId !== sceneId) {
+      const previousButton = findDeleteButton(armedDelete.sceneId);
+      if (previousButton) {
+        styleArmedDeleteButton(previousButton, false);
+      }
+    }
+
+    armedDelete = { sceneId, videoKey };
+    styleArmedDeleteButton(button, true);
+    clearTimeout(armedDeleteTimer);
+    armedDeleteTimer = setTimeout(disarmDelete, ARMED_DELETE_TIMEOUT_MS);
+  }
+
+  function disarmDelete() {
+    clearTimeout(armedDeleteTimer);
+    armedDeleteTimer = null;
+    if (!armedDelete) {
       return;
     }
 
+    const button = findDeleteButton(armedDelete.sceneId);
+    if (button) {
+      styleArmedDeleteButton(button, false);
+    }
+    armedDelete = null;
+  }
+
+  // Refreshes rebuild the scene rows, so the armed styling is re-applied by
+  // scene id after each render; a row that no longer exists disarms.
+  function syncArmedDelete() {
+    if (!armedDelete) {
+      return;
+    }
+
+    const button = findDeleteButton(armedDelete.sceneId);
+    if (!button) {
+      armedDelete = null;
+      return;
+    }
+
+    styleArmedDeleteButton(button, true);
+  }
+
+  function handleDeletePress(videoKey, scene, button) {
+    if (armedDelete && armedDelete.sceneId === scene.id && armedDelete.videoKey === videoKey) {
+      disarmDelete();
+      deleteScene(videoKey, scene.id);
+      return;
+    }
+
+    armDelete(videoKey, scene.id, button);
+  }
+
+  async function deleteScene(videoKey, sceneId) {
     const response = await sendToActiveTab({
       type: MESSAGE_TYPES.DELETE_SCENE,
       payload: { videoKey, sceneId }
@@ -396,6 +476,7 @@
     }
 
     await refreshContext();
+    setStatus("Scene deleted.", false);
   }
 
   async function toggleOverlay() {
@@ -451,6 +532,26 @@
       event.preventDefault();
       closeSceneDialog(null);
     });
+    // Any press outside the armed delete button disarms it, so a stray
+    // second click elsewhere never deletes unexpectedly.
+    document.addEventListener("pointerdown", (event) => {
+      if (!armedDelete) {
+        return;
+      }
+
+      const target = event.target;
+      const row = target instanceof Element ? target.closest("[data-scene-id]") : null;
+      if (row && row.dataset.sceneId === armedDelete.sceneId && target.closest(".scene-delete")) {
+        return;
+      }
+
+      disarmDelete();
+    }, true);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        disarmDelete();
+      }
+    }, true);
   }
 
   document.addEventListener("DOMContentLoaded", () => {

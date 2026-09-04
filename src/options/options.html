@@ -123,7 +123,13 @@
 
         <section class="settings-section danger-section">
           <h2>Data</h2>
-          <p class="hint">Data stays in chrome.storage.local. Export from the library before clearing data.</p>
+          <p class="hint">Data stays in this browser profile's chrome.storage.local. Export from the library before clearing data.</p>
+          <div class="storage-meter">
+            <div id="storageMeterBar" class="storage-meter__bar" role="progressbar" aria-label="SceneMarks storage usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="storageMeterFill" class="storage-meter__fill"></div>
+            </div>
+            <p id="storageMeterLabel" class="storage-meter__label">Checking storage usage...</p>
+          </div>
           <button id="clearDataButton" class="danger-button" type="button">Clear All SceneMarks Data</button>
         </section>
 

@@ -10,9 +10,10 @@ It stores saved scenes locally in `chrome.storage.local`. It does not download v
 - Generic HTML5 video detection with active-video scoring.
 - Local timestamp and scene-range storage.
 - Safe note/tag rendering with `textContent`.
-- Popup controls for save, range start/end, jump, edit, and delete.
+- Popup controls for save, range start/end, jump, edit, and delete, with the popup delete using the same two-step arm-then-confirm interaction as the overlay.
 - Optional always-visible draggable overlay panel with Current and Library views.
 - Page-level customizable hotkeys from the extension settings page.
+- Settings page with a storage usage meter for its local `chrome.storage` data.
 - Browser command shortcuts for quick save, range toggle, and library.
 - Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key on the next page load.)
 - Library page with search, filters, favorites, edit/delete, copy share text, export, import, and a Random pick button.
