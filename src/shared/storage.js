@@ -1,6 +1,6 @@
 (function attachStorage(root) {
   const SceneMarks = root.SceneMarks || {};
-  const { STORAGE_KEY } = SceneMarks.Constants;
+  const { MAX_NOTE_LENGTH, MESSAGE_TYPES, STORAGE_KEY } = SceneMarks.Constants;
   const { isValidSeconds, normalizeSeconds } = SceneMarks.Time;
   const {
     createDefaultState,
@@ -61,10 +61,34 @@
     return normalized;
   }
 
+  // Every mutation is a get → mutate → set cycle over the whole state blob,
+  // and these cycles arrive concurrently from multiple callers. The FIFO
+  // queue is what keeps one cycle from reading the pre-write state of
+  // another and dropping its change on the floor.
+  let writeQueue = Promise.resolve();
+
+  function enqueueWrite(task) {
+    const run = writeQueue.then(task, task);
+    // Chain off a settled copy so a rejected write never poisons the tasks
+    // queued behind it; the failing caller still sees the rejection via run.
+    writeQueue = run.then(() => {}, () => {});
+    return run;
+  }
+
+  // Mutators return this to mean "nothing changed — do not write".
+  // updateState still resolves, with the current state.
+  const SKIP_WRITE = Symbol("SceneMarks.SKIP_WRITE");
+
   async function updateState(mutator) {
-    const state = await getState();
-    const nextState = await mutator(state);
-    return setState(nextState || state);
+    return enqueueWrite(async () => {
+      const state = await getState();
+      const nextState = await mutator(state);
+      if (nextState === SKIP_WRITE) {
+        return state;
+      }
+
+      return setState(nextState || state);
+    });
   }
 
   function upsertVideo(state, identity) {
@@ -333,7 +357,7 @@
 
         updatedScene = {
           ...scene,
-          note: updates.note === undefined ? scene.note : sanitizeText(updates.note, 1000),
+          note: updates.note === undefined ? scene.note : sanitizeText(updates.note, MAX_NOTE_LENGTH),
           tags: updates.tags === undefined ? scene.tags : normalizeTags(updates.tags),
           favorite: updates.favorite === undefined ? scene.favorite : updates.favorite === true,
           updatedAt: new Date().toISOString()
@@ -420,6 +444,22 @@
     return state.settings;
   }
 
+  // The new value must come from the draft inside the locked updateState:
+  // deciding it from a cached settings copy first lets a quick double-toggle
+  // read the same stale value twice and no-op.
+  async function toggleFloatingButton() {
+    const state = await updateState((draftState) => {
+      draftState.settings = normalizeSettings({
+        ...draftState.settings,
+        enableFloatingButton: !draftState.settings.enableFloatingButton,
+        hotkeys: { ...draftState.settings.hotkeys }
+      });
+      return draftState;
+    });
+
+    return { ok: true, settings: state.settings };
+  }
+
   function mergeVideo(existing, incoming) {
     if (!existing) {
       return incoming;
@@ -453,18 +493,21 @@
   async function importState(importedValue, options) {
     const opts = options || {};
     const importedState = normalizeState(importedValue);
-    const state = opts.merge === false ? createDefaultState() : await getState();
 
-    for (const video of Object.values(importedState.videos)) {
-      state.videos[video.videoKey] = mergeVideo(state.videos[video.videoKey], video);
-    }
+    return enqueueWrite(async () => {
+      const state = opts.merge === false ? createDefaultState() : await getState();
 
-    if (opts.includeSettings === true) {
-      state.settings = importedState.settings;
-    }
+      for (const video of Object.values(importedState.videos)) {
+        state.videos[video.videoKey] = mergeVideo(state.videos[video.videoKey], video);
+      }
 
-    await setState(state);
-    return getState();
+      if (opts.includeSettings === true) {
+        state.settings = importedState.settings;
+      }
+
+      await setState(state);
+      return getState();
+    });
   }
 
   async function deleteVideo(videoKey) {
@@ -490,13 +533,74 @@
   }
 
   async function clearAllData() {
-    return setState(createDefaultState());
+    return enqueueWrite(() => setState(createDefaultState()));
+  }
+
+  // The service worker's STORAGE_RPC handler whitelist must match this list
+  // exactly: these are the mutation methods remote contexts are allowed to
+  // run there, because the worker is the single writer.
+  const RPC_METHODS = Object.freeze([
+    "saveScene",
+    "startRange",
+    "endRange",
+    "deleteScene",
+    "updateScene",
+    "updateVideo",
+    "updateSettings",
+    "setPendingJump",
+    "consumePendingJump",
+    "clearPendingJump",
+    "deleteVideo",
+    "importState",
+    "clearAllData",
+    "toggleFloatingButton"
+  ]);
+
+  function sendStorageRpc(method, args) {
+    return new Promise((resolve, reject) => {
+      root.chrome.runtime.sendMessage(
+        { type: MESSAGE_TYPES.STORAGE_RPC, payload: { method, args } },
+        (response) => {
+          const error = root.chrome.runtime.lastError;
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+
+          if (response && response.ok) {
+            resolve(response.result);
+            return;
+          }
+
+          reject(new Error((response && response.error) || `Storage RPC "${method}" failed`));
+        }
+      );
+    });
+  }
+
+  // UI and content contexts mutate storage through this client so their
+  // writes execute — serialized by the worker's write queue — in the service
+  // worker. Reads stay local: they cannot lose updates. Deliberately no
+  // setState, updateState, or upsertVideo here.
+  function createClient() {
+    const client = {
+      getState,
+      getScenesForVideo
+    };
+
+    RPC_METHODS.forEach((method) => {
+      client[method] = (...args) => sendStorageRpc(method, args);
+    });
+
+    return client;
   }
 
   SceneMarks.Storage = {
+    SKIP_WRITE,
     clearAllData,
     clearPendingJump,
     consumePendingJump,
+    createClient,
     deleteScene,
     deleteVideo,
     endRange,
@@ -507,6 +611,7 @@
     setState,
     setPendingJump,
     startRange,
+    toggleFloatingButton,
     updateScene,
     updateVideo,
     updateSettings,

@@ -11,6 +11,9 @@
   // After the user scrolls or presses on the current-scene list, auto-scroll
   // to the highlighted row stays off this long so browsing is not interrupted.
   const AUTO_SCROLL_SUPPRESSION_MS = 8000;
+  // Every keystroke rebuilds the whole library DOM, so renders are bounded to
+  // one per pause in typing.
+  const LIBRARY_SEARCH_DEBOUNCE_MS = 150;
 
   function createElement(tagName, className, text) {
     const element = document.createElement(tagName);
@@ -88,9 +91,15 @@
     let pointerStart = null;
     let panelStart = null;
     let didDrag = false;
+    // Header-drag layout batch: host dimensions captured once per drag and
+    // the latest move target, applied by a single pending animation frame.
+    let dragDims = null;
+    let dragTarget = null;
+    let dragFrame = null;
     let isCollapsed = false;
     let toastTimer = null;
     let toastLayerTimer = null;
+    let librarySearchTimer = null;
     // The Popover API lifts toasts above fullscreen players; without it the
     // plain fixed-position toast still works outside fullscreen.
     const supportsToastPopover = typeof toast.showPopover === "function";
@@ -138,7 +147,13 @@
     document.documentElement.append(toast);
     toast.addEventListener("click", hideToast);
 
-    librarySearch.addEventListener("input", () => renderLibrary(latestState));
+    librarySearch.addEventListener("input", () => {
+      root.clearTimeout(librarySearchTimer);
+      librarySearchTimer = root.setTimeout(() => {
+        librarySearchTimer = null;
+        renderLibrary(latestState);
+      }, LIBRARY_SEARCH_DEBOUNCE_MS);
+    });
 
     function armAutoScrollSuppression() {
       suppressAutoScrollUntil = Date.now() + AUTO_SCROLL_SUPPRESSION_MS;
@@ -265,6 +280,14 @@
       root.clearTimeout(toastTimer);
       root.clearTimeout(toastLayerTimer);
       root.clearTimeout(armedDeleteTimer);
+      root.clearTimeout(librarySearchTimer);
+      librarySearchTimer = null;
+      if (dragFrame !== null) {
+        root.cancelAnimationFrame(dragFrame);
+        dragFrame = null;
+      }
+      dragTarget = null;
+      dragDims = null;
       armedDelete = null;
       lowerToastLayer();
       document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
@@ -753,10 +776,10 @@
       await refresh();
     }
 
-    function moveTo(clientX, clientY) {
+    function moveTo(clientX, clientY, dims) {
       const margin = 8;
-      const width = host.offsetWidth || 340;
-      const height = host.offsetHeight || 260;
+      const width = dims && dims.w ? dims.w : 340;
+      const height = dims && dims.h ? dims.h : 260;
       const x = Math.min(Math.max(clientX, margin), root.innerWidth - width - margin);
       const y = Math.min(Math.max(clientY, margin), root.innerHeight - height - margin);
       host.style.left = `${x}px`;
@@ -771,9 +794,10 @@
       }
 
       pointerStart = { x: event.clientX, y: event.clientY };
+      dragDims = { w: host.offsetWidth, h: host.offsetHeight };
       panelStart = {
-        x: host.offsetLeft || root.innerWidth - host.offsetWidth - 22,
-        y: host.offsetTop || root.innerHeight - host.offsetHeight - 22
+        x: host.offsetLeft || root.innerWidth - dragDims.w - 22,
+        y: host.offsetTop || root.innerHeight - dragDims.h - 22
       };
       didDrag = false;
       header.setPointerCapture(event.pointerId);
@@ -791,12 +815,37 @@
       }
 
       didDrag = true;
-      moveTo(panelStart.x + deltaX, panelStart.y + deltaY);
+      // Reading layout per move would force a synchronous reflow each time,
+      // so the write is batched into at most one animation frame and later
+      // moves just update the target while a frame is pending.
+      dragTarget = { x: panelStart.x + deltaX, y: panelStart.y + deltaY };
+      if (dragFrame === null) {
+        dragFrame = root.requestAnimationFrame(() => {
+          dragFrame = null;
+          if (dragTarget) {
+            moveTo(dragTarget.x, dragTarget.y, dragDims);
+          }
+        });
+      }
     });
 
     header.addEventListener("pointerup", () => {
       pointerStart = null;
       panelStart = null;
+      if (dragFrame !== null) {
+        root.cancelAnimationFrame(dragFrame);
+        dragFrame = null;
+      }
+
+      // Apply the last target synchronously so releasing the panel never
+      // drops the final move to the cancelled frame; re-applying an already
+      // written position is a no-op.
+      if (dragTarget) {
+        moveTo(dragTarget.x, dragTarget.y, dragDims);
+      }
+
+      dragTarget = null;
+      dragDims = null;
     });
 
     setViewMode("current");

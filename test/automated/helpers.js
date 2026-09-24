@@ -35,6 +35,7 @@ function clone(value) {
 // serialization, so tests assert persisted data rather than live references.
 function installChromeStorageMock(seedState) {
   const store = new Map();
+  let writes = 0;
   if (seedState !== undefined) {
     store.set("scenemarksState", clone(seedState));
   }
@@ -57,6 +58,7 @@ function installChromeStorageMock(seedState) {
         },
         set(values, callback) {
           Object.entries(values).forEach(([name, value]) => store.set(name, clone(value)));
+          writes += 1;
           callback();
         }
       }
@@ -64,6 +66,9 @@ function installChromeStorageMock(seedState) {
   };
 
   return {
+    get writes() {
+      return writes;
+    },
     readState() {
       return clone(store.get("scenemarksState"));
     }

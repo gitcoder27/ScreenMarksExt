@@ -1,7 +1,7 @@
 (function initializePopup() {
   const { ARMED_DELETE_TIMEOUT_MS, MESSAGE_TYPES } = SceneMarks.Constants;
   const { formatRange, formatSeconds } = SceneMarks.Time;
-  const Storage = SceneMarks.Storage;
+  const Storage = SceneMarks.Storage.createClient();
   const elements = {};
   let latestContext = null;
   let latestSettings = null;
@@ -18,6 +18,14 @@
   function setStatus(message, isError) {
     elements.statusBox.textContent = message || "";
     elements.statusBox.classList.toggle("is-error", Boolean(isError));
+  }
+
+  function storageErrorMessage(error) {
+    if (/Extension context invalidated/i.test(String((error && error.message) || error))) {
+      return "SceneMarks was reloaded. Reopen the popup.";
+    }
+
+    return error.message;
   }
 
   function sendRuntimeMessage(message) {
@@ -248,7 +256,13 @@
   }
 
   async function toggleSceneFavorite(videoKey, scene) {
-    const response = await Storage.updateScene(videoKey, scene.id, { favorite: !scene.favorite });
+    let response = null;
+    try {
+      response = await Storage.updateScene(videoKey, scene.id, { favorite: !scene.favorite });
+    } catch (error) {
+      setStatus(storageErrorMessage(error), true);
+      return;
+    }
 
     if (!response.ok) {
       setStatus(response.error || "Could not update favorite.", true);
@@ -480,8 +494,15 @@
   }
 
   async function toggleOverlay() {
-    const currentEnabled = latestSettings ? latestSettings.enableFloatingButton : false;
-    latestSettings = await Storage.updateSettings({ enableFloatingButton: !currentEnabled });
+    let result = null;
+    try {
+      result = await Storage.toggleFloatingButton();
+    } catch (error) {
+      setStatus(storageErrorMessage(error), true);
+      return;
+    }
+
+    latestSettings = result.settings;
     renderOverlayToggle();
     setStatus(latestSettings.enableFloatingButton ? "Overlay panel enabled." : "Overlay panel disabled.", false);
   }

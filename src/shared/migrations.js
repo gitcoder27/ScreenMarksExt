@@ -15,6 +15,7 @@
 
     let migratedCount = 0;
     await SceneMarks.Storage.updateState((state) => {
+      let changed = false;
       for (const video of Object.values(state.videos)) {
         if (!String(video.videoKey).startsWith("generic:")) {
           continue;
@@ -73,9 +74,12 @@
         }
 
         migratedCount += 1;
+        changed = true;
       }
 
-      return state;
+      // An idle pass must not rewrite the whole state: the write triggers a
+      // storage.onChanged broadcast that every open tab reacts to.
+      return changed ? state : SceneMarks.Storage.SKIP_WRITE;
     });
 
     return { ok: true, migratedCount };

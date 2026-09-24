@@ -1,20 +1,49 @@
 (function initializeSceneMarksContent(root) {
+  // A leftover token alone cannot block re-injection: after an extension
+  // reload the previous copy is dead while its token stays set, so ownership
+  // is decided by that copy's liveness probe, which reads the chrome binding
+  // of its own injection context.
   if (root.__SceneMarksContentLoaded) {
-    return;
+    let previousCopyIsLive = false;
+    try {
+      previousCopyIsLive = typeof root.__SceneMarksLivenessProbe === "function"
+        && root.__SceneMarksLivenessProbe() === true;
+    } catch (_error) {
+      previousCopyIsLive = false;
+    }
+
+    if (previousCopyIsLive) {
+      return;
+    }
   }
+
   const CONTEXT_TOKEN = `${Date.now()}-${Math.random()}`;
   root.__SceneMarksContentLoaded = CONTEXT_TOKEN;
+  // chrome is per-injection-context, so a dead orphan's probe returns false
+  // while a live copy's returns true.
+  const livenessProbe = () => {
+    try {
+      return Boolean(root.chrome && root.chrome.runtime && root.chrome.runtime.id);
+    } catch (_error) {
+      return false;
+    }
+  };
+  root.__SceneMarksLivenessProbe = livenessProbe;
 
   const SceneMarks = root.SceneMarks;
   const { MESSAGE_TYPES } = SceneMarks.Constants;
   const { formatRange, formatSeconds } = SceneMarks.Time;
-  const Storage = SceneMarks.Storage;
+  // Mutations must go through the service-worker RPC client (single writer)
+  // so concurrent tabs cannot lose each other's read-modify-write updates;
+  // reads stay local to this context.
+  const Storage = SceneMarks.Storage.createClient();
   let settings = null;
   let overlay = null;
   let overlayRefreshTimer = null;
   let pendingJumpTimer = null;
   let contextDead = false;
   let hotkeyListener = null;
+  let stopNavigationWatcher = null;
 
   function isContextDead() {
     if (contextDead) {
@@ -39,6 +68,10 @@
     contextDead = true;
     root.clearTimeout(overlayRefreshTimer);
     root.clearTimeout(pendingJumpTimer);
+    if (stopNavigationWatcher) {
+      stopNavigationWatcher();
+      stopNavigationWatcher = null;
+    }
     detector.stop();
 
     if (hotkeyListener) {
@@ -55,6 +88,12 @@
     // clobber a replacement script that has already been injected.
     if (root.__SceneMarksContentLoaded === CONTEXT_TOKEN) {
       root.__SceneMarksContentLoaded = false;
+    }
+
+    // The global probe holds whatever the last injected copy installed, so it
+    // may already belong to a successor; only clear it while it is still ours.
+    if (root.__SceneMarksLivenessProbe === livenessProbe) {
+      root.__SceneMarksLivenessProbe = null;
     }
   }
 
@@ -152,17 +191,72 @@
     return parsed.key ? parsed : null;
   }
 
+  // Saved settings keep the human key token ("S", "3", ","), which is matched
+  // against event.code because event.key shifts under layouts and modifier
+  // composing (macOS Alt+Shift+S yields key "Í"), while event.code does not.
+  const KEY_TOKEN_TO_CODE = {
+    ",": "Comma",
+    ".": "Period",
+    "/": "Slash",
+    "\\": "Backslash",
+    ";": "Semicolon",
+    "'": "Quote",
+    "[": "BracketLeft",
+    "]": "BracketRight",
+    "-": "Minus",
+    "=": "Equal",
+    "`": "Backquote",
+    arrowup: "ArrowUp",
+    arrowdown: "ArrowDown",
+    arrowleft: "ArrowLeft",
+    arrowright: "ArrowRight",
+    pageup: "PageUp",
+    pagedown: "PageDown",
+    home: "Home",
+    end: "End",
+    insert: "Insert",
+    delete: "Delete",
+    space: "Space",
+    enter: "Enter",
+    escape: "Escape",
+    tab: "Tab",
+    backspace: "Backspace"
+  };
+
+  // Inverse of the options-page recorder's code-to-token mapping; every entry
+  // must round-trip.
+  function tokenToCode(token) {
+    if (/^[a-z]$/.test(token)) {
+      return `Key${token.toUpperCase()}`;
+    }
+
+    if (/^[0-9]$/.test(token)) {
+      return `Digit${token}`;
+    }
+
+    if (/^f\d{1,2}$/.test(token)) {
+      return token.toUpperCase();
+    }
+
+    return KEY_TOKEN_TO_CODE[token] || null;
+  }
+
   function shortcutMatches(event, shortcut) {
     const parsed = parseShortcut(shortcut);
     if (!parsed) {
       return false;
     }
 
+    const expectedCode = tokenToCode(parsed.key);
+    const keyMatches = expectedCode !== null
+      ? event.code === expectedCode
+      : event.key.toLowerCase() === parsed.key;
+
     return event.altKey === parsed.altKey
       && event.ctrlKey === parsed.ctrlKey
       && event.metaKey === parsed.metaKey
       && event.shiftKey === parsed.shiftKey
-      && event.key.toLowerCase() === parsed.key;
+      && keyMatches;
   }
 
   function getCurrentSnapshot() {
@@ -465,26 +559,43 @@
     });
   }
 
-  function installUrlWatcher() {
-    const notify = () => {
-      root.setTimeout(() => detector.scheduleScan(), 150);
-    };
-    const originalPushState = history.pushState;
-    const originalReplaceState = history.replaceState;
+  // history.pushState/replaceState cannot be observed from this isolated
+  // world (the page's main world keeps its own unpatched history), so SPA
+  // navigations are watched through the Navigation API; only engines without
+  // it fall back to polling location.href.
+  function installNavigationWatcher() {
+    const stopFunctions = [];
+    const notify = () => detector.scheduleScan();
 
-    history.pushState = function pushState(...args) {
-      const result = originalPushState.apply(this, args);
-      notify();
-      return result;
-    };
+    const onPopState = () => notify();
+    root.addEventListener("popstate", onPopState, { passive: true });
+    stopFunctions.push(() => root.removeEventListener("popstate", onPopState));
 
-    history.replaceState = function replaceState(...args) {
-      const result = originalReplaceState.apply(this, args);
-      notify();
-      return result;
-    };
+    const navigation = root.navigation;
+    if (navigation && typeof navigation.addEventListener === "function") {
+      const onNavigate = () => notify();
+      navigation.addEventListener("navigate", onNavigate);
+      stopFunctions.push(() => navigation.removeEventListener("navigate", onNavigate));
+    } else {
+      let lastHref = root.location.href;
+      let pollTimer = null;
+      const pollForHrefChange = () => {
+        if (root.location.href !== lastHref) {
+          lastHref = root.location.href;
+          notify();
+        }
 
-    root.addEventListener("popstate", notify, { passive: true });
+        pollTimer = root.setTimeout(pollForHrefChange, 1000);
+      };
+
+      pollTimer = root.setTimeout(pollForHrefChange, 1000);
+      stopFunctions.push(() => root.clearTimeout(pollTimer));
+    }
+
+    return () => {
+      stopFunctions.forEach((stop) => stop());
+      stopFunctions.length = 0;
+    };
   }
 
   async function openLibrary() {
@@ -509,8 +620,11 @@
   }
 
   async function toggleOverlayVisibility() {
-    const enabled = !getSettingsSync().enableFloatingButton;
-    settings = await Storage.updateSettings({ enableFloatingButton: enabled });
+    // Atomic flip in the service worker; the result carries the settings as
+    // they are after the flip, avoiding a stale read-then-write here.
+    const result = await Storage.toggleFloatingButton();
+    settings = result.settings;
+    const enabled = Boolean(settings && settings.enableFloatingButton);
 
     if (overlay) {
       overlay.setEnabled(enabled);
@@ -700,12 +814,9 @@
 
   async function init() {
     installMessageListener();
-    if (SceneMarks.Migrations && SceneMarks.Migrations.migrateLegacyGenericVideos) {
-      await SceneMarks.Migrations.migrateLegacyGenericVideos();
-    }
     await loadSettings();
     detector.start();
-    installUrlWatcher();
+    stopNavigationWatcher = installNavigationWatcher();
     installPageHotkeys();
     installStorageListener();
     await initOverlay();

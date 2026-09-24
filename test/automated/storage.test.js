@@ -250,3 +250,63 @@ test("updateSettings persists merged settings", async () => {
   assert.equal(store.readState().settings.duplicateThresholdSeconds, 0);
   assert.equal(settings.hotkeys.quickSave, SceneMarks.Constants.DEFAULT_SETTINGS.hotkeys.quickSave);
 });
+
+test("overlapping updateState calls serialize so both writes survive", async () => {
+  await Promise.all([
+    Storage.updateState(async (state) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      state.settings.duplicateThresholdSeconds = 5;
+      return state;
+    }),
+    Storage.updateState((state) => {
+      state.settings.quickSaveRequiresNote = true;
+      return state;
+    })
+  ]);
+
+  const settings = store.readState().settings;
+  assert.equal(settings.duplicateThresholdSeconds, 5);
+  assert.equal(settings.quickSaveRequiresNote, true);
+});
+
+test("a mutator returning SKIP_WRITE resolves without writing", async () => {
+  await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 10 });
+  const writesBefore = store.writes;
+
+  const state = await Storage.updateState(() => Storage.SKIP_WRITE);
+
+  assert.equal(store.writes, writesBefore);
+  assert.equal(state.videos[IDENTITY.videoKey].scenes.length, 1);
+});
+
+test("toggleFloatingButton flips the persisted flag and returns the new settings", async () => {
+  assert.equal(SceneMarks.Constants.DEFAULT_SETTINGS.enableFloatingButton, true);
+
+  const first = await Storage.toggleFloatingButton();
+  assert.equal(first.ok, true);
+  assert.equal(first.settings.enableFloatingButton, false);
+  assert.equal(store.readState().settings.enableFloatingButton, false);
+
+  const second = await Storage.toggleFloatingButton();
+  assert.equal(second.settings.enableFloatingButton, true);
+  assert.equal(store.readState().settings.enableFloatingButton, true);
+});
+
+test("quick concurrent double-toggles each flip the flag exactly once", async () => {
+  await Promise.all([Storage.toggleFloatingButton(), Storage.toggleFloatingButton()]);
+
+  assert.equal(store.readState().settings.enableFloatingButton, true);
+});
+
+test("a mutator that throws rejects its own call without blocking the next write", async () => {
+  await assert.rejects(
+    Storage.updateState(() => {
+      throw new Error("mutator exploded");
+    }),
+    /mutator exploded/
+  );
+
+  const result = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 10 });
+  assert.equal(result.ok, true);
+  assert.equal(store.readState().videos[IDENTITY.videoKey].scenes.length, 1);
+});

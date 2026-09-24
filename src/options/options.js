@@ -1,5 +1,5 @@
 (function initializeOptions() {
-  const Storage = SceneMarks.Storage;
+  const Storage = SceneMarks.Storage.createClient();
   const elements = {};
   let recordTarget = null;
 
@@ -74,9 +74,76 @@
     elements.statusMessage.style.color = isError ? "#fca5a5" : "#4ade80";
   }
 
+  function isDeadContextError(error) {
+    return /Extension context invalidated/i.test(String((error && error.message) || error));
+  }
+
+  function storageStatusMessage(error) {
+    if (isDeadContextError(error)) {
+      return "SceneMarks was reloaded. Refresh this page to continue.";
+    }
+
+    return error.message;
+  }
+
+  // Inverse of the content-script code→key matching map: recordings derive
+  // the stored token from event.code because event.key yields composed
+  // characters on macOS (Alt+Shift+S records "Í") that never match.
+  const CODE_TOKEN_MAP = Object.freeze({
+    Comma: ",",
+    Period: ".",
+    Slash: "/",
+    Backslash: "\\",
+    Semicolon: ";",
+    Quote: "'",
+    BracketLeft: "[",
+    BracketRight: "]",
+    Minus: "-",
+    Equal: "=",
+    Backquote: "`"
+  });
+
+  // Codes matched verbatim by the content script; anything else falls back
+  // to event.key so unmatched layouts keep today's behavior.
+  const VERBATIM_CODE_PATTERN = /^(F\d{1,2}|Arrow(Up|Down|Left|Right)|PageUp|PageDown|Home|End|Insert|Delete|Space|Enter|Escape|Tab|Backspace)$/;
+
+  function tokenFromCode(code) {
+    if (!code) {
+      return null;
+    }
+
+    const letter = /^Key([A-Z])$/.exec(code);
+    if (letter) {
+      return letter[1];
+    }
+
+    const digit = /^Digit(\d)$/.exec(code);
+    if (digit) {
+      return digit[1];
+    }
+
+    if (Object.prototype.hasOwnProperty.call(CODE_TOKEN_MAP, code)) {
+      return CODE_TOKEN_MAP[code];
+    }
+
+    if (VERBATIM_CODE_PATTERN.test(code)) {
+      return code;
+    }
+
+    return null;
+  }
+
+  function keyTokenFromEvent(event) {
+    const token = tokenFromCode(event.code);
+    if (token !== null) {
+      return token;
+    }
+
+    return event.key.length === 1 ? event.key.toUpperCase() : event.key;
+  }
+
   function formatKeyboardEvent(event) {
     const parts = [];
-    const key = event.key.length === 1 ? event.key.toUpperCase() : event.key;
 
     if (event.ctrlKey) {
       parts.push("Ctrl");
@@ -95,7 +162,7 @@
       return "";
     }
 
-    parts.push(key);
+    parts.push(keyTokenFromEvent(event));
     return parts.join("+");
   }
 
@@ -122,25 +189,32 @@
 
   async function saveSettings(event) {
     event.preventDefault();
-    await Storage.updateSettings({
-      enableFloatingButton: elements.enableFloatingButton.checked,
-      quickSaveRequiresNote: elements.quickSaveRequiresNote.checked,
-      duplicateThresholdSeconds: Number(elements.duplicateThresholdSeconds.value),
-      defaultJumpBehavior: elements.defaultJumpBehavior.value,
-      enableGenericSites: elements.enableGenericSites.checked,
-      enablePageHotkeys: elements.enablePageHotkeys.checked,
-      hotkeys: {
-        quickSave: elements.quickSaveHotkey.value,
-        toggleRange: elements.toggleRangeHotkey.value,
-        startRange: elements.startRangeHotkey.value,
-        endRange: elements.endRangeHotkey.value,
-        nextScene: elements.nextSceneHotkey.value,
-        previousScene: elements.previousSceneHotkey.value,
-        randomVideo: elements.randomVideoHotkey.value,
-        toggleOverlay: elements.toggleOverlayHotkey.value,
-        openLibrary: elements.openLibraryHotkey.value
-      }
-    });
+
+    try {
+      await Storage.updateSettings({
+        enableFloatingButton: elements.enableFloatingButton.checked,
+        quickSaveRequiresNote: elements.quickSaveRequiresNote.checked,
+        duplicateThresholdSeconds: Number(elements.duplicateThresholdSeconds.value),
+        defaultJumpBehavior: elements.defaultJumpBehavior.value,
+        enableGenericSites: elements.enableGenericSites.checked,
+        enablePageHotkeys: elements.enablePageHotkeys.checked,
+        hotkeys: {
+          quickSave: elements.quickSaveHotkey.value,
+          toggleRange: elements.toggleRangeHotkey.value,
+          startRange: elements.startRangeHotkey.value,
+          endRange: elements.endRangeHotkey.value,
+          nextScene: elements.nextSceneHotkey.value,
+          previousScene: elements.previousSceneHotkey.value,
+          randomVideo: elements.randomVideoHotkey.value,
+          toggleOverlay: elements.toggleOverlayHotkey.value,
+          openLibrary: elements.openLibraryHotkey.value
+        }
+      });
+    } catch (error) {
+      setStatus(storageStatusMessage(error), true);
+      return;
+    }
+
     setStatus("Settings saved.", false);
   }
 
@@ -195,7 +269,13 @@
       return;
     }
 
-    await Storage.clearAllData();
+    try {
+      await Storage.clearAllData();
+    } catch (error) {
+      setStatus(storageStatusMessage(error), true);
+      return;
+    }
+
     await loadSettings();
     await updateStorageMeter();
     setStatus("All SceneMarks data cleared.", false);

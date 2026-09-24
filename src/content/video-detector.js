@@ -1,7 +1,10 @@
 (function attachVideoDetector(root) {
   const SceneMarks = root.SceneMarks || {};
 
-  const SCAN_DEBOUNCE_MS = 400;
+  // Trailing-throttle window for DOM scans: at most one scan per interval no
+  // matter how many triggers arrive, so continuously-mutating pages cannot
+  // starve detection or churn timers.
+  const SCAN_THROTTLE_MS = 400;
   const MIN_MAIN_VIDEO_SECONDS = 60;
   const TINY_AREA_PX = 240 * 135;
 
@@ -129,6 +132,9 @@
     let scanTimer = null;
     let lastNotifiedSignature = null;
     const mediaEvents = ["loadedmetadata", "timeupdate", "play", "pause", "durationchange"];
+    // Precise signals that a <video> appeared or was replaced; they do not
+    // bubble, so they are observed in the capture phase at the window.
+    const scanTriggerEvents = ["loadedmetadata", "emptied"];
 
     function snapshotSignature(snapshot) {
       return `${snapshot.detected}|${snapshot.videoKey}`;
@@ -186,9 +192,19 @@
       notify();
     }
 
+    // Trailing throttle, not a reset-debounce: MutationObserver batches arrive
+    // continuously on mutating pages, and resetting the timer per batch would
+    // starve scans indefinitely. At most one run is ever pending; mutations
+    // that land while it waits for its slot are picked up by the next trigger.
     function scheduleScan() {
-      root.clearTimeout(scanTimer);
-      scanTimer = root.setTimeout(() => bindVideo(findActiveVideo()), SCAN_DEBOUNCE_MS);
+      if (scanTimer !== null) {
+        return;
+      }
+
+      scanTimer = root.setTimeout(() => {
+        scanTimer = null;
+        bindVideo(findActiveVideo());
+      }, SCAN_THROTTLE_MS);
     }
 
     function getSnapshot() {
@@ -236,11 +252,15 @@
       scheduleScan();
       observer = new MutationObserver(scheduleScan);
       observer.observe(document.documentElement, { childList: true, subtree: true });
+      scanTriggerEvents.forEach((eventName) => {
+        root.addEventListener(eventName, scheduleScan, true);
+      });
       root.addEventListener("resize", scheduleScan, { passive: true });
     }
 
     function stop() {
       root.clearTimeout(scanTimer);
+      scanTimer = null;
       if (observer) {
         observer.disconnect();
       }
@@ -250,6 +270,9 @@
           activeVideo.removeEventListener(eventName, notifyTick);
         });
       }
+      scanTriggerEvents.forEach((eventName) => {
+        root.removeEventListener(eventName, scheduleScan, true);
+      });
       root.removeEventListener("resize", scheduleScan);
       activeVideo = null;
       lastNotifiedSignature = null;

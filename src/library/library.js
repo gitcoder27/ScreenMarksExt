@@ -1,12 +1,33 @@
 (function initializeLibrary() {
-  const Storage = SceneMarks.Storage;
+  const Storage = SceneMarks.Storage.createClient();
   const { formatRange } = SceneMarks.Time;
+  // The list re-renders from scratch, so keystrokes are batched into one
+  // render shortly after typing stops.
+  const SEARCH_RENDER_DEBOUNCE_MS = 150;
+  const RELOAD_MESSAGE = "SceneMarks was reloaded. Refresh this page to continue.";
   const elements = {};
   let state = null;
+  let searchRenderTimer = null;
   const expandedVideoKeys = new Set();
 
   function byId(id) {
     return document.getElementById(id);
+  }
+
+  function isDeadContextError(error) {
+    return /Extension context invalidated/i.test(String((error && error.message) || error));
+  }
+
+  // Storage mutations are RPC calls into the service worker; a rejection
+  // (e.g. the extension was reloaded mid-call) must land in the summary box
+  // instead of escaping as an unhandled rejection from listeners.
+  async function runStorageAction(action) {
+    try {
+      return { ok: true, value: await action() };
+    } catch (error) {
+      elements.summaryBox.textContent = isDeadContextError(error) ? RELOAD_MESSAGE : error.message;
+      return { ok: false };
+    }
   }
 
   function clearNode(node) {
@@ -88,14 +109,21 @@
     return Object.values(state.videos)
       .filter((video) => platform === "all" || video.platform === platform)
       .filter((video) => videoMatches(video, query))
-      .map((video) => ({
-        ...video,
-        scenes: video.scenes.filter((scene) => {
-          const favoriteMatch = !favoritesOnly || video.favorite || scene.favorite;
-          const queryMatch = sceneMatches(scene, query) || videoMatches({ ...video, scenes: [] }, query);
-          return favoriteMatch && queryMatch;
-        })
-      }))
+      .map((video) => {
+        // A metadata hit (title, platform, URL) surfaces every scene of the
+        // video, while a note/tag hit surfaces only the matching scenes.
+        // videoMatches is invariant across a video's scenes; evaluate the
+        // metadata-only form once instead of per scene.
+        const metadataMatch = videoMatches({ ...video, scenes: [] }, query);
+        return {
+          ...video,
+          scenes: video.scenes.filter((scene) => {
+            const favoriteMatch = !favoritesOnly || video.favorite || scene.favorite;
+            const queryMatch = sceneMatches(scene, query) || metadataMatch;
+            return favoriteMatch && queryMatch;
+          })
+        };
+      })
       .filter((video) => {
         if (favoritesOnly) {
           return video.favorite || video.scenes.length > 0;
@@ -363,13 +391,18 @@
       return;
     }
 
-    const pendingResult = await Storage.setPendingJump({
+    const pendingAction = await runStorageAction(() => Storage.setPendingJump({
       videoKey: video.videoKey,
       sceneId: scene.id,
       seconds: scene.startSeconds,
       url
-    });
+    }));
 
+    if (!pendingAction.ok) {
+      return;
+    }
+
+    const pendingResult = pendingAction.value;
     if (!pendingResult.ok) {
       elements.summaryBox.textContent = pendingResult.error || "Could not queue timestamp jump.";
       return;
@@ -428,7 +461,11 @@
       return;
     }
 
-    await Storage.deleteVideo(video.videoKey);
+    const action = await runStorageAction(() => Storage.deleteVideo(video.videoKey));
+    if (!action.ok) {
+      return;
+    }
+
     await loadState();
   }
 
@@ -444,7 +481,11 @@
       return;
     }
 
-    await Storage.deleteScene(video.videoKey, scene.id);
+    const action = await runStorageAction(() => Storage.deleteScene(video.videoKey, scene.id));
+    if (!action.ok) {
+      return;
+    }
+
     await loadState();
   }
 
@@ -459,12 +500,21 @@
       return;
     }
 
-    await Storage.updateScene(videoKey, scene.id, { note, tags });
+    const action = await runStorageAction(() => Storage.updateScene(videoKey, scene.id, { note, tags }));
+    if (!action.ok) {
+      return;
+    }
+
     await loadState();
   }
 
   async function toggleVideoFavorite(videoKey, favorite) {
-    const result = await Storage.updateVideo(videoKey, { favorite });
+    const action = await runStorageAction(() => Storage.updateVideo(videoKey, { favorite }));
+    if (!action.ok) {
+      return;
+    }
+
+    const result = action.value;
     if (!result.ok) {
       elements.summaryBox.textContent = result.error || "Could not update video favorite.";
       return;
@@ -477,7 +527,11 @@
   }
 
   async function toggleFavorite(videoKey, scene) {
-    await Storage.updateScene(videoKey, scene.id, { favorite: !scene.favorite });
+    const action = await runStorageAction(() => Storage.updateScene(videoKey, scene.id, { favorite: !scene.favorite }));
+    if (!action.ok) {
+      return;
+    }
+
     await loadState();
   }
 
@@ -518,20 +572,32 @@
       return;
     }
 
+    let parsed = null;
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text);
-      await Storage.importState(parsed, { merge: true });
-      elements.importInput.value = "";
-      await loadState();
-      elements.summaryBox.textContent = "Import complete.";
+      parsed = JSON.parse(text);
     } catch (error) {
       elements.summaryBox.textContent = `Import failed: ${error.message}`;
+      return;
     }
+
+    const action = await runStorageAction(() => Storage.importState(parsed, { merge: true }));
+    if (!action.ok) {
+      return;
+    }
+
+    elements.importInput.value = "";
+    await loadState();
+    elements.summaryBox.textContent = "Import complete.";
   }
 
   async function loadState() {
-    state = await Storage.getState();
+    const action = await runStorageAction(() => Storage.getState());
+    if (!action.ok) {
+      return;
+    }
+
+    state = action.value;
     render();
   }
 
@@ -568,7 +634,10 @@
 
   function bindEvents() {
     elements.openOptionsButton.addEventListener("click", () => chrome.runtime.openOptionsPage());
-    elements.searchInput.addEventListener("input", render);
+    elements.searchInput.addEventListener("input", () => {
+      window.clearTimeout(searchRenderTimer);
+      searchRenderTimer = window.setTimeout(render, SEARCH_RENDER_DEBOUNCE_MS);
+    });
     elements.platformFilter.addEventListener("change", render);
     elements.favoritesOnly.addEventListener("change", render);
     elements.randomVideoButton.addEventListener("click", pickRandomVideo);

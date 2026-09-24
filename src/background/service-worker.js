@@ -3,8 +3,21 @@ importScripts(
   "../shared/time.js",
   "../shared/ids.js",
   "../shared/schema.js",
-  "../shared/storage.js"
+  "../shared/storage.js",
+  "../content/site-adapters/generic.js",
+  "../content/site-adapters/netflix.js",
+  "../content/site-adapters/prime-video.js",
+  "../content/site-adapters/hotstar.js",
+  "../content/site-adapters/youtube.js",
+  "../content/site-adapters/index.js",
+  "../shared/migrations.js"
 );
+
+// Safe to re-run on every worker start: it performs no storage write when
+// nothing needs migrating.
+SceneMarks.Migrations.migrateLegacyGenericVideos().catch((error) => {
+  console.warn("SceneMarks legacy migration failed:", error);
+});
 
 const CONTENT_SCRIPT_FILES = [
   "src/shared/constants.js",
@@ -18,13 +31,32 @@ const CONTENT_SCRIPT_FILES = [
   "src/content/site-adapters/hotstar.js",
   "src/content/site-adapters/youtube.js",
   "src/content/site-adapters/index.js",
-  "src/shared/migrations.js",
   "src/content/video-detector.js",
   "src/content/overlay.js",
   "src/content/content-script.js"
 ];
 
 const OVERLAY_CSS_FILE = "src/content/overlay.css";
+
+// The worker is the single storage writer: only mutation methods may be
+// invoked from other contexts via STORAGE_RPC; reads and internal helpers
+// are excluded on purpose.
+const STORAGE_RPC_METHODS = new Set([
+  "saveScene",
+  "startRange",
+  "endRange",
+  "deleteScene",
+  "updateScene",
+  "updateVideo",
+  "updateSettings",
+  "setPendingJump",
+  "consumePendingJump",
+  "clearPendingJump",
+  "deleteVideo",
+  "importState",
+  "clearAllData",
+  "toggleFloatingButton"
+]);
 
 function sendTabMessage(tabId, message) {
   return new Promise((resolve, reject) => {
@@ -42,7 +74,7 @@ function sendTabMessage(tabId, message) {
 
 async function ensureContentScript(tabId) {
   try {
-    await sendTabMessage(tabId, { type: "SCENEMARKS_PING" });
+    await sendTabMessage(tabId, { type: SceneMarks.Constants.MESSAGE_TYPES.PING });
     return true;
   } catch (_error) {
     await chrome.scripting.insertCSS({
@@ -56,14 +88,14 @@ async function ensureContentScript(tabId) {
 
     for (let attempt = 0; attempt < 8; attempt += 1) {
       try {
-        await sendTabMessage(tabId, { type: "SCENEMARKS_PING" });
+        await sendTabMessage(tabId, { type: SceneMarks.Constants.MESSAGE_TYPES.PING });
         return true;
       } catch (_error) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
 
-    return true;
+    return false;
   }
 }
 
@@ -85,7 +117,11 @@ async function forwardToActiveTab(message) {
   }
 
   try {
-    await ensureContentScript(tab.id);
+    const ready = await ensureContentScript(tab.id);
+    if (!ready) {
+      return { ok: false, error: "SceneMarks could not start on this page. Reload the tab and try again." };
+    }
+
     return await sendTabMessage(tab.id, message);
   } catch (error) {
     return {
@@ -260,8 +296,8 @@ chrome.commands.onCommand.addListener((command) => {
   }
 
   const type = command === "mark-scene-range"
-    ? "SCENEMARKS_TOGGLE_RANGE"
-    : "SCENEMARKS_QUICK_SAVE";
+    ? SceneMarks.Constants.MESSAGE_TYPES.TOGGLE_RANGE
+    : SceneMarks.Constants.MESSAGE_TYPES.QUICK_SAVE;
 
   forwardToActiveTab({
     type,
@@ -269,17 +305,28 @@ chrome.commands.onCommand.addListener((command) => {
   });
 });
 
+async function handleStorageRpc(payload) {
+  const method = payload && typeof payload.method === "string" ? payload.method : null;
+  if (!payload || typeof payload !== "object" || !STORAGE_RPC_METHODS.has(method)) {
+    return { ok: false, error: "SceneMarks storage RPC rejected an unknown or disallowed method." };
+  }
+
+  const args = Array.isArray(payload.args) ? payload.args : [];
+  const result = await SceneMarks.Storage[method](...args);
+  return { ok: true, result };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message.type !== "string") {
     return false;
   }
 
-  if (message.type === "SCENEMARKS_OPEN_LIBRARY") {
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_LIBRARY) {
     openLibrary().then(sendResponse);
     return true;
   }
 
-  if (message.type === "SCENEMARKS_OPEN_VIDEO_URL") {
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_VIDEO_URL) {
     openVideoUrl(message.payload && message.payload.url).then(sendResponse);
     return true;
   }
@@ -294,13 +341,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === "SCENEMARKS_GET_ACTIVE_TAB_CONTEXT") {
-    forwardToActiveTab({ type: "SCENEMARKS_GET_VIDEO_CONTEXT" }).then(sendResponse);
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.GET_ACTIVE_TAB_CONTEXT) {
+    forwardToActiveTab({ type: SceneMarks.Constants.MESSAGE_TYPES.GET_CONTEXT }).then(sendResponse);
     return true;
   }
 
-  if (message.type === "SCENEMARKS_FORWARD_TO_ACTIVE_TAB") {
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.FORWARD_TO_ACTIVE_TAB) {
     forwardToActiveTab(message.payload).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.STORAGE_RPC) {
+    handleStorageRpc(message.payload)
+      .then((response) => sendResponse(response))
+      .catch((error) => {
+        sendResponse({ ok: false, error: (error && error.message) || String(error) });
+      });
     return true;
   }
 
