@@ -16,7 +16,7 @@ It stores saved scenes locally in `chrome.storage.local`. It does not download v
 - Settings page with a storage usage meter for its local `chrome.storage` data.
 - Browser command shortcuts for quick save, range toggle, and library.
 - Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key on the next page load.)
-- Library page with search, filters, favorites, edit/delete, copy share text, export, import, and a Random pick button.
+- Library page with search, filters, favorites, edit/delete, copy share text, export, import, a Random pick button, and a batch Open Random that opens any chosen number of random videos in new tabs.
 - Favorites at both levels: star entire videos or individual timestamps from the library, the overlay, or the popup. The library's and overlay's favorites filters include any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.
 - Permissions: `storage`, `activeTab`, `scripting`, and `tabs`, plus an `<all_urls>` host permission so content scripts (video detection, overlay, queued jumps) run on every page without popup activation.
@@ -42,7 +42,7 @@ The same flow works in Chrome at `chrome://extensions`.
 6. Click **Jump** beside any saved scene to seek back to it.
 7. Use **Overlay On/Off** in the popup to show or hide the draggable page overlay.
 8. Use the overlay **Library** view to search saved videos without leaving the current page.
-9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite videos and scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick and highlight a random video that is not already open in a tab of the current window. When every matching video is already open, SceneMarks says so instead of re-picking one.
+9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite videos and scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick and highlight a random video that is not already open in a tab of the current window. When every matching video is already open, SceneMarks says so instead of re-picking one. To open several at once, set the count next to **Open Random** and click it (or press `Enter` in the count field): that many distinct videos are sampled uniformly at random from the filtered, not-already-open pool and opened in background tabs — asking for more than are available opens all of them.
 10. Star a video or timestamp anywhere (library, overlay, popup) and it shows up under the favorites filters in the library page and the overlay Library view.
 
 ## Overlay Panel

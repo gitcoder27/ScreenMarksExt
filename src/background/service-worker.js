@@ -220,6 +220,22 @@ function pickRandom(items) {
   return items[Math.floor(Math.random() * items.length)];
 }
 
+// Uniform sample without replacement: a partial Fisher-Yates shuffle over a
+// copy of the pool, so picking N never degenerates into taking the first N.
+function sampleRandom(items, count) {
+  const pool = items.slice();
+  const limit = Math.min(count, pool.length);
+
+  for (let index = 0; index < limit; index += 1) {
+    const swap = index + Math.floor(Math.random() * (pool.length - index));
+    const held = pool[index];
+    pool[index] = pool[swap];
+    pool[swap] = held;
+  }
+
+  return pool.slice(0, limit);
+}
+
 // Shared picker behind the library page and overlay Random buttons: it
 // restricts the pool to videoKeys when provided, drops videos already open
 // in this window's tabs, and avoids repeating excludeVideoKey (the previous
@@ -289,6 +305,47 @@ async function openRandomVideo() {
   };
 }
 
+// Batch version of the Random pick: samples `count` distinct videos from the
+// caller-filtered pool, skipping ones already open in this window, and opens
+// each in a background tab so the library page keeps focus.
+async function openRandomVideos(payload) {
+  const options = payload && typeof payload === "object" ? payload : {};
+  const requested = Math.floor(Number(options.count));
+  if (!Number.isFinite(requested) || requested < 1) {
+    return { ok: false, error: "Choose how many videos to open (1 or more)." };
+  }
+
+  const state = await SceneMarks.Storage.getState();
+  let videos = Object.values(state.videos);
+
+  if (Array.isArray(options.videoKeys) && options.videoKeys.length) {
+    const allowed = new Set(options.videoKeys);
+    videos = videos.filter((video) => allowed.has(video.videoKey));
+  }
+
+  const openUrlKeys = await getOpenTabUrlKeys();
+  const candidates = videos.filter((video) => {
+    const openableUrl = video.canonicalUrl || (Array.isArray(video.rawUrls) ? video.rawUrls[0] : null);
+    return Boolean(openableUrl) && !isOpenInTab(video, openUrlKeys);
+  });
+
+  if (!candidates.length) {
+    return { ok: false, error: "Every matching video is already open in a tab in this window." };
+  }
+
+  const picked = sampleRandom(candidates, requested);
+  for (const video of picked) {
+    await chrome.tabs.create({ url: video.canonicalUrl || video.rawUrls[0], active: false });
+  }
+
+  return {
+    ok: true,
+    openedCount: picked.length,
+    requestedCount: requested,
+    videos: picked.map((video) => ({ videoKey: video.videoKey, title: video.title }))
+  };
+}
+
 chrome.commands.onCommand.addListener((command) => {
   if (command === "open-library") {
     openLibrary();
@@ -333,6 +390,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEO) {
     openRandomVideo().then(sendResponse);
+    return true;
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEOS) {
+    openRandomVideos(message.payload).then(sendResponse);
     return true;
   }
 

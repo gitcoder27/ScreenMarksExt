@@ -111,6 +111,7 @@ label {
 }
 
 input[type="search"],
+input[type="number"],
 select {
   background: #0f172a;
   border: 1px solid #334155;
@@ -186,6 +187,12 @@ select {
 .toolbar-actions button:first-child {
   background: #facc15;
   color: #111827;
+}
+
+.toolbar-actions #randomOpenCount {
+  min-width: 0;
+  text-align: center;
+  width: 58px;
 }
 
 .summary-box {

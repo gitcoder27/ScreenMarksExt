@@ -242,6 +242,51 @@
     elements.summaryBox.textContent = `Random pick: ${response.video.title || "Untitled video"}`;
   }
 
+  async function openRandomVideos() {
+    const requested = Math.floor(Number(elements.randomOpenCount.value));
+    if (!Number.isFinite(requested) || requested < 1) {
+      elements.summaryBox.textContent = "Enter how many videos to open (1 or more).";
+      return;
+    }
+
+    elements.randomOpenCount.value = String(requested);
+
+    const videos = getFilteredVideos();
+    if (!videos.length) {
+      elements.summaryBox.textContent = "No videos to pick from under the current filters.";
+      return;
+    }
+
+    elements.openRandomVideosButton.disabled = true;
+    let response = null;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEOS,
+        payload: {
+          videoKeys: videos.map((video) => video.videoKey),
+          count: requested
+        }
+      });
+    } catch (_error) {
+      // Fall through to the shared error handling below.
+    } finally {
+      elements.openRandomVideosButton.disabled = false;
+    }
+
+    if (!response || !response.ok) {
+      elements.summaryBox.textContent = (response && response.error) || "Opening random videos is unavailable right now.";
+      return;
+    }
+
+    const titles = response.videos.map((video) => video.title || "Untitled video");
+    const shown = titles.slice(0, 5).join(", ");
+    const shortfall = response.openedCount < response.requestedCount
+      ? ` (only ${response.openedCount} not already open)`
+      : "";
+    const suffix = titles.length > 5 ? `, and ${titles.length - 5} more` : "";
+    elements.summaryBox.textContent = `Opened ${response.openedCount} random ${response.openedCount === 1 ? "video" : "videos"}${shortfall}: ${shown}${suffix}`;
+  }
+
   function handleLibraryKeydown(event) {
     if (elements.confirmDialog.open) {
       return;
@@ -616,6 +661,8 @@
       "platformFilter",
       "favoritesOnly",
       "randomVideoButton",
+      "randomOpenCount",
+      "openRandomVideosButton",
       "expandAllButton",
       "collapseAllButton",
       "summaryBox",
@@ -641,6 +688,13 @@
     elements.platformFilter.addEventListener("change", render);
     elements.favoritesOnly.addEventListener("change", render);
     elements.randomVideoButton.addEventListener("click", pickRandomVideo);
+    elements.openRandomVideosButton.addEventListener("click", openRandomVideos);
+    elements.randomOpenCount.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        openRandomVideos();
+      }
+    });
     elements.expandAllButton.addEventListener("click", expandAllVideos);
     elements.collapseAllButton.addEventListener("click", collapseAllVideos);
     elements.exportButton.addEventListener("click", exportData);
