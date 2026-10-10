@@ -126,13 +126,25 @@
     };
   }
 
+  // After an extension reload or auto-update, this copy's detector keeps
+  // firing in old tabs; the first callback that notices tears it all down.
   const detector = SceneMarks.VideoDetector.createVideoDetector({
     onContextChange: () => {
+      if (isContextDead()) {
+        tearDownDeadContext();
+        return;
+      }
+
       scheduleOverlayRefresh(1000);
       schedulePendingJumpCheck(500);
     },
     onPlaybackTick: (seconds) => {
-      if (overlay && !isContextDead()) {
+      if (isContextDead()) {
+        tearDownDeadContext();
+        return;
+      }
+
+      if (overlay) {
         overlay.updatePlaybackTime(seconds);
       }
     }
@@ -728,7 +740,12 @@
     }
 
     overlayRefreshTimer = root.setTimeout(() => {
-      if (!overlay || isContextDead()) {
+      if (isContextDead()) {
+        tearDownDeadContext();
+        return;
+      }
+
+      if (!overlay) {
         return;
       }
 
@@ -751,6 +768,7 @@
     root.clearTimeout(pendingJumpTimer);
     pendingJumpTimer = root.setTimeout(() => {
       if (isContextDead()) {
+        tearDownDeadContext();
         return;
       }
 
