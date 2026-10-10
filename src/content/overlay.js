@@ -114,6 +114,7 @@
     // Set when a render skipped the hidden Library tab; it is rebuilt when
     // the user switches to it.
     let libraryStale = false;
+    let refreshSeq = 0;
     let lastRandomPickKey = null;
     let favoritesOnly = false;
     const expandedVideoKeys = new Set();
@@ -329,7 +330,14 @@
         return;
       }
 
+      const seq = ++refreshSeq;
       const state = await actions.getState();
+      // A refresh started later may have resolved first; never let an older
+      // read overwrite it.
+      if (seq !== refreshSeq) {
+        return;
+      }
+
       render(state);
     }
 
