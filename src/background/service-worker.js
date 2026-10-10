@@ -58,6 +58,19 @@ const STORAGE_RPC_METHODS = new Set([
   "toggleFloatingButton"
 ]);
 
+// Bulk-destructive methods that only extension pages (options, library)
+// ever call; content scripts run inside arbitrary web pages and must not
+// be able to wipe or replace the library.
+const EXTENSION_PAGE_ONLY_RPC_METHODS = new Set(["importState", "clearAllData"]);
+
+// sender.url is set by the browser, so a page (or a compromised renderer)
+// cannot claim an extension-page URL. Extension pages opened in a tab
+// (library, options) also carry sender.tab, so that cannot be the test.
+function isExtensionPageSender(sender) {
+  return Boolean(sender && typeof sender.url === "string"
+    && sender.url.startsWith(chrome.runtime.getURL("")));
+}
+
 function sendTabMessage(tabId, message) {
   return new Promise((resolve, reject) => {
     chrome.tabs.sendMessage(tabId, message, (response) => {
@@ -362,10 +375,14 @@ chrome.commands.onCommand.addListener((command) => {
   });
 });
 
-async function handleStorageRpc(payload) {
+async function handleStorageRpc(payload, sender) {
   const method = payload && typeof payload.method === "string" ? payload.method : null;
   if (!payload || typeof payload !== "object" || !STORAGE_RPC_METHODS.has(method)) {
     return { ok: false, error: "SceneMarks storage RPC rejected an unknown or disallowed method." };
+  }
+
+  if (EXTENSION_PAGE_ONLY_RPC_METHODS.has(method) && !isExtensionPageSender(sender)) {
+    return { ok: false, error: "SceneMarks storage RPC rejected a method that only extension pages may call." };
   }
 
   const args = Array.isArray(payload.args) ? payload.args : [];
@@ -373,53 +390,56 @@ async function handleStorageRpc(payload) {
   return { ok: true, result };
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+// Every async handler answers, even on failure: an unanswered message
+// leaves the caller with only "message port closed".
+function respondWith(promise, sendResponse) {
+  promise.then(sendResponse, (error) => {
+    sendResponse({ ok: false, error: (error && error.message) || String(error) });
+  });
+  return true;
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== "string") {
     return false;
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_LIBRARY) {
-    openLibrary().then(sendResponse);
-    return true;
+    return respondWith(openLibrary(), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_VIDEO_URL) {
-    openVideoUrl(message.payload && message.payload.url).then(sendResponse);
-    return true;
+    return respondWith(openVideoUrl(message.payload && message.payload.url), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEO) {
-    openRandomVideo().then(sendResponse);
-    return true;
+    return respondWith(openRandomVideo(), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEOS) {
-    openRandomVideos(message.payload).then(sendResponse);
-    return true;
+    return respondWith(openRandomVideos(message.payload), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.PICK_RANDOM_VIDEO) {
-    pickRandomVideoCandidate(message.payload).then(sendResponse);
-    return true;
+    return respondWith(pickRandomVideoCandidate(message.payload), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.GET_ACTIVE_TAB_CONTEXT) {
-    forwardToActiveTab({ type: SceneMarks.Constants.MESSAGE_TYPES.GET_CONTEXT }).then(sendResponse);
-    return true;
+    return respondWith(forwardToActiveTab({ type: SceneMarks.Constants.MESSAGE_TYPES.GET_CONTEXT }), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.FORWARD_TO_ACTIVE_TAB) {
-    forwardToActiveTab(message.payload).then(sendResponse);
-    return true;
+    // Only the popup forwards commands; a page must not drive other tabs.
+    if (!isExtensionPageSender(sender)) {
+      sendResponse({ ok: false, error: "Only SceneMarks pages may forward commands to the active tab." });
+      return false;
+    }
+
+    return respondWith(forwardToActiveTab(message.payload), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.STORAGE_RPC) {
-    handleStorageRpc(message.payload)
-      .then((response) => sendResponse(response))
-      .catch((error) => {
-        sendResponse({ ok: false, error: (error && error.message) || String(error) });
-      });
-    return true;
+    return respondWith(handleStorageRpc(message.payload, sender), sendResponse);
   }
 
   return false;
