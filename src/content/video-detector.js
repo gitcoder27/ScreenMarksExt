@@ -7,6 +7,9 @@
   const SCAN_THROTTLE_MS = 400;
   const MIN_MAIN_VIDEO_SECONDS = 60;
   const TINY_AREA_PX = 240 * 135;
+  // Any currentTime write makes MSE players (Netflix, Prime, Hotstar,
+  // YouTube) flush and rebuffer, even when the position barely moves.
+  const SEEK_EPSILON_SECONDS = 0.25;
 
   function isFiniteDuration(video) {
     return Number.isFinite(video.duration) && video.duration > 0;
@@ -231,13 +234,16 @@
       const wasPaused = video.paused;
       await waitForReady(video, 3000);
 
-      try {
-        video.currentTime = target;
-      } catch (error) {
-        return { ok: false, error: "This site blocked seeking right now." };
+      if (Math.abs(video.currentTime - target) >= SEEK_EPSILON_SECONDS) {
+        try {
+          video.currentTime = target;
+        } catch (error) {
+          return { ok: false, error: "This site blocked seeking right now." };
+        }
       }
 
-      if (behavior === "play-after-jump" || (behavior === "preserve-play-state" && !wasPaused)) {
+      const shouldPlay = behavior === "play-after-jump" || (behavior === "preserve-play-state" && !wasPaused);
+      if (shouldPlay && video.paused) {
         await video.play().catch(() => null);
       }
 

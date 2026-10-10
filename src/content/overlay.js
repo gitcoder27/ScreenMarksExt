@@ -773,7 +773,12 @@
         : `Opening video at ${formatSeconds(scene.startSeconds)}`;
 
       showToast(result.ok ? successMessage : result.error || "Could not jump", result.ok ? "success" : "error");
-      await refresh();
+      // Same-video jumps change no stored data; the seek's timeupdate moves
+      // the highlight. Opening another video writes a pending jump, which
+      // refreshes through storage.onChanged.
+      if (!isCurrentVideo) {
+        await refresh();
+      }
     }
 
     function moveTo(clientX, clientY, dims) {

@@ -459,12 +459,10 @@
   async function seekTo(payload) {
     const currentSettings = getSettingsSync();
     const behavior = payload && payload.behavior ? payload.behavior : currentSettings.defaultJumpBehavior;
-    const result = await detector.seekTo(payload && payload.seconds, behavior);
-    if (result.ok) {
-      scheduleOverlayRefresh(250);
-    }
-
-    return result;
+    // No overlay refresh here: a seek changes no stored data, and the seek's
+    // own timeupdate moves the highlight. A refresh would re-read storage and
+    // rebuild the overlay while the site's player is rebuffering.
+    return detector.seekTo(payload && payload.seconds, behavior);
   }
 
   async function deleteScene(payload) {
