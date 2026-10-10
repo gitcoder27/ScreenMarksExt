@@ -167,12 +167,17 @@
     return settings || SceneMarks.Constants.DEFAULT_SETTINGS;
   }
 
-  function isTextInputTarget(target) {
+  function isTextInputTarget(event) {
+    // Keys typed inside an (open) shadow root are retargeted to its host;
+    // the composed path still starts at the real input.
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    const target = path[0] || event.target;
     if (!(target instanceof Element)) {
       return false;
     }
 
-    return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']"));
+    // isContentEditable also covers contenteditable="plaintext-only".
+    return target.isContentEditable || Boolean(target.closest("input, textarea, select"));
   }
 
   function parseShortcut(shortcut) {
@@ -654,7 +659,7 @@
       }
 
       const currentSettings = getSettingsSync();
-      if (!currentSettings.enablePageHotkeys || event.repeat || isTextInputTarget(event.target)) {
+      if (!currentSettings.enablePageHotkeys || event.repeat || isTextInputTarget(event)) {
         return;
       }
 
@@ -697,8 +702,12 @@
       } catch (error) {
         if (isInvalidContextError(error)) {
           tearDownDeadContext();
+          return;
         }
-        return;
+
+        // e.g. the worker RPC failed or storage quota was exceeded; without
+        // feedback the hotkey just appears to do nothing.
+        result = errorResponse(error);
       }
 
       if (overlay && result && result.error) {
