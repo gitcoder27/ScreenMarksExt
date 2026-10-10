@@ -42,6 +42,7 @@
   let overlayRefreshTimer = null;
   let overlayRefreshDeferred = false;
   let pendingJumpTimer = null;
+  let pendingJumpInFlight = false;
   let contextDead = false;
   let hotkeyListener = null;
   let stopNavigationWatcher = null;
@@ -464,7 +465,7 @@
     // No overlay refresh here: a seek changes no stored data, and the seek's
     // own timeupdate moves the highlight. A refresh would re-read storage and
     // rebuild the overlay while the site's player is rebuffering.
-    return detector.seekTo(payload && payload.seconds, behavior);
+    return detector.seekTo(payload && payload.seconds, behavior, { verify: Boolean(payload && payload.verify) });
   }
 
   async function deleteScene(payload) {
@@ -767,7 +768,7 @@
   }
 
   async function attemptPendingJump() {
-    if (isContextDead()) {
+    if (isContextDead() || pendingJumpInFlight) {
       return;
     }
 
@@ -776,16 +777,30 @@
       return;
     }
 
-    const result = await Storage.consumePendingJump(snapshot.videoKey);
-    if (!result.ok) {
+    // Consume only after the seek is confirmed: a seek that lands too early
+    // (and is overridden by the site's own resume seek) or fails leaves the
+    // jump queued for the next attempt instead of losing it.
+    const state = await Storage.getState();
+    const pendingJump = state.pendingJump;
+    if (!pendingJump || pendingJump.videoKey !== snapshot.videoKey) {
       return;
     }
 
-    const seekResult = await seekTo({ seconds: result.pendingJump.seconds });
+    pendingJumpInFlight = true;
+    let seekResult;
+    try {
+      seekResult = await seekTo({ seconds: pendingJump.seconds, verify: true });
+      if (seekResult.ok) {
+        await Storage.consumePendingJump(snapshot.videoKey);
+      }
+    } finally {
+      pendingJumpInFlight = false;
+    }
+
     if (overlay) {
       overlay.showToast(
         seekResult.ok
-          ? `Jumped to ${formatSeconds(result.pendingJump.seconds)}`
+          ? `Jumped to ${formatSeconds(pendingJump.seconds)}`
           : seekResult.error || "Queued jump could not seek yet",
         seekResult.ok ? "success" : "error"
       );

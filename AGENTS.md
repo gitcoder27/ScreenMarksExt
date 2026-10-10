@@ -9,7 +9,7 @@ SceneMarks is a local-first Chromium (Manifest V3) browser extension for saving 
 - `src/content/` — `video-detector.js`, `overlay.js` + `overlay.css`, `content-script.js`, and `site-adapters/` (generic, netflix, prime-video, hotstar, youtube, index).
 - `src/background/service-worker.js` — MV3 service worker: message routing, content-script injection fallback, tab management, and the single storage writer (STORAGE_RPC handler + startup legacy migration).
 - `src/popup/`, `src/options/`, `src/library/` — extension pages (plain HTML/CSS/JS, no framework).
-- `test/automated/` — dependency-free Node tests for the shared layer (schema, storage, time). Run: `node --test test/automated/*.test.js`.
+- `test/automated/` — dependency-free Node tests for the shared layer (schema, storage, time) and the video detector's `seekTo` (fake media element). Run: `node --test test/automated/*.test.js`.
 - `test/manual-html5-video.html` — manual test page for local video playback.
 - `assets/icons/` — extension icons.
 

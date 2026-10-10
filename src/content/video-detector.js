@@ -10,6 +10,12 @@
   // Any currentTime write makes MSE players (Netflix, Prime, Hotstar,
   // YouTube) flush and rebuffer, even when the position barely moves.
   const SEEK_EPSILON_SECONDS = 0.25;
+  // Verified seeks (queued jumps on a freshly loaded player) wait for this
+  // long without any seek in progress before seeking and before checking
+  // where playback landed.
+  const SEEK_QUIET_MS = 500;
+  const SEEK_SETTLE_TIMEOUT_MS = 3000;
+  const SEEK_VERIFY_TOLERANCE_SECONDS = 2;
 
   function isFiniteDuration(video) {
     return Number.isFinite(video.duration) && video.duration > 0;
@@ -100,6 +106,39 @@
 
       video.addEventListener("loadedmetadata", cleanup, { once: true });
       video.addEventListener("canplay", cleanup, { once: true });
+    });
+  }
+
+  // Resolves once the video has gone quietMs with no seek in progress, or
+  // after timeoutMs. Players often run their own "resume where you left
+  // off" seek right after loading, which would override an earlier seek.
+  function waitForSeekQuiet(video, quietMs, timeoutMs) {
+    return new Promise((resolve) => {
+      let quietTimer = null;
+      const deadline = root.setTimeout(finish, timeoutMs);
+
+      function armQuietTimer() {
+        root.clearTimeout(quietTimer);
+        if (!video.seeking) {
+          quietTimer = root.setTimeout(finish, quietMs);
+        }
+      }
+
+      function onSeeking() {
+        root.clearTimeout(quietTimer);
+      }
+
+      function finish() {
+        root.clearTimeout(deadline);
+        root.clearTimeout(quietTimer);
+        video.removeEventListener("seeking", onSeeking);
+        video.removeEventListener("seeked", armQuietTimer);
+        resolve();
+      }
+
+      video.addEventListener("seeking", onSeeking);
+      video.addEventListener("seeked", armQuietTimer);
+      armQuietTimer();
     });
   }
 
@@ -219,9 +258,25 @@
       return createSnapshot(video);
     }
 
-    async function seekTo(seconds, behavior) {
+    function applySeek(video, target) {
+      if (Math.abs(video.currentTime - target) < SEEK_EPSILON_SECONDS) {
+        return true;
+      }
+
+      try {
+        video.currentTime = target;
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    // options.verify: wait for the player to settle first, then confirm the
+    // seek landed (retrying once) instead of assuming it did.
+    async function seekTo(seconds, behavior, options) {
       const video = findActiveVideo();
       const target = Number(seconds);
+      const verify = Boolean(options && options.verify);
 
       if (!video) {
         return { ok: false, error: "No active video detected." };
@@ -231,15 +286,14 @@
         return { ok: false, error: "Invalid seek target." };
       }
 
-      const wasPaused = video.paused;
       await waitForReady(video, 3000);
+      if (verify) {
+        await waitForSeekQuiet(video, SEEK_QUIET_MS, SEEK_SETTLE_TIMEOUT_MS);
+      }
 
-      if (Math.abs(video.currentTime - target) >= SEEK_EPSILON_SECONDS) {
-        try {
-          video.currentTime = target;
-        } catch (error) {
-          return { ok: false, error: "This site blocked seeking right now." };
-        }
+      const wasPaused = video.paused;
+      if (!applySeek(video, target)) {
+        return { ok: false, error: "This site blocked seeking right now." };
       }
 
       const shouldPlay = behavior === "play-after-jump" || (behavior === "preserve-play-state" && !wasPaused);
@@ -249,6 +303,22 @@
 
       if (behavior === "pause-after-jump" || (behavior === "preserve-play-state" && wasPaused)) {
         video.pause();
+      }
+
+      if (verify) {
+        let landed = false;
+        for (let attempt = 0; attempt < 2 && !landed; attempt += 1) {
+          if (attempt > 0) {
+            applySeek(video, target);
+          }
+
+          await waitForSeekQuiet(video, SEEK_QUIET_MS, SEEK_SETTLE_TIMEOUT_MS);
+          landed = Math.abs(video.currentTime - target) <= SEEK_VERIFY_TOLERANCE_SECONDS;
+        }
+
+        if (!landed) {
+          return { ok: false, error: "The player moved away from the queued jump." };
+        }
       }
 
       return { ok: true, currentTimeSeconds: video.currentTime };
