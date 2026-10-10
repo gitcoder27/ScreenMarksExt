@@ -446,7 +446,18 @@
       return;
     }
 
-    chrome.tabs.create({ url });
+    // Opened by the worker, which only allows http(s) and file URLs.
+    chrome.runtime.sendMessage({
+      type: SceneMarks.Constants.MESSAGE_TYPES.OPEN_VIDEO_URL,
+      payload: { url }
+    }, (response) => {
+      const error = chrome.runtime.lastError;
+      if (error || !response || !response.ok) {
+        elements.summaryBox.textContent = error
+          ? error.message
+          : response && response.error ? response.error : "Could not open video.";
+      }
+    });
   }
 
   async function openVideoAtScene(video, scene) {

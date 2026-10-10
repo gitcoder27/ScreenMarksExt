@@ -36,6 +36,24 @@
     return String(value || "").trim().slice(0, maxLength);
   }
 
+  const OPENABLE_URL_PROTOCOLS = new Set(["http:", "https:", "file:"]);
+
+  // Saved video URLs are opened from the library, popup and overlay, so
+  // anything but a web or file URL (javascript:, data:, chrome:, ... from a
+  // crafted import) is dropped.
+  function sanitizeUrl(value) {
+    const text = sanitizeText(value, 2048);
+    if (!text) {
+      return "";
+    }
+
+    try {
+      return OPENABLE_URL_PROTOCOLS.has(new URL(text).protocol) ? text : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
   function normalizeTags(tags) {
     const rawTags = Array.isArray(tags)
       ? tags
@@ -165,7 +183,7 @@
       ? value.scenes.map(normalizeScene).filter(Boolean)
       : [];
     const rawUrls = Array.isArray(value.rawUrls)
-      ? value.rawUrls.map((url) => sanitizeText(url, 2048)).filter(Boolean)
+      ? value.rawUrls.map(sanitizeUrl).filter(Boolean)
       : [];
     const createdAt = sanitizeText(value.createdAt, 60) || new Date().toISOString();
     const updatedAt = sanitizeText(value.updatedAt, 60) || createdAt;
@@ -174,7 +192,7 @@
       videoKey,
       platform: VALID_PLATFORMS.has(value.platform) ? value.platform : "unknown",
       title: sanitizeText(value.title, 300) || null,
-      canonicalUrl: sanitizeText(value.canonicalUrl, 2048),
+      canonicalUrl: sanitizeUrl(value.canonicalUrl),
       rawUrls: Array.from(new Set(rawUrls)),
       favorite: value.favorite === true,
       createdAt,
@@ -212,7 +230,7 @@
     const videoKey = sanitizeText(value.videoKey, 500);
     const sceneId = sanitizeText(value.sceneId, 120);
     const seconds = Number(value.seconds);
-    const url = sanitizeText(value.url, 2048);
+    const url = sanitizeUrl(value.url);
     const createdAt = sanitizeText(value.createdAt, 60);
     const createdAtMs = Date.parse(createdAt);
 
@@ -266,6 +284,7 @@
     normalizeTags,
     normalizeVideo,
     sanitizeText,
+    sanitizeUrl,
     sortScenes
   };
 

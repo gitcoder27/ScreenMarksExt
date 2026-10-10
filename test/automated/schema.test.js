@@ -65,6 +65,35 @@ test("normalizeVideo falls back to unknown platform, dedupes urls, and defaults 
   assert.equal(video.scenes.length, 1);
 });
 
+test("normalizeVideo drops URLs that are not http(s) or file", () => {
+  const video = Schema.normalizeVideo({
+    videoKey: "generic:x",
+    canonicalUrl: "javascript:alert(1)",
+    rawUrls: [
+      "data:text/html,hi",
+      "chrome://settings",
+      "not a url",
+      "https://a.example/watch",
+      "file:///Users/me/clip.mp4"
+    ]
+  });
+
+  assert.equal(video.canonicalUrl, "");
+  assert.deepEqual(video.rawUrls, ["https://a.example/watch", "file:///Users/me/clip.mp4"]);
+});
+
+test("normalizePendingJump rejects a non-web URL", () => {
+  const jump = Schema.normalizePendingJump({
+    videoKey: "k",
+    sceneId: "s",
+    seconds: 5,
+    url: "javascript:alert(1)",
+    createdAt: new Date().toISOString()
+  });
+
+  assert.equal(jump, null);
+});
+
 test("normalizeVideo preserves a favorite flag", () => {
   const video = Schema.normalizeVideo({ videoKey: "k", platform: "netflix", favorite: true });
   assert.equal(video.favorite, true);
