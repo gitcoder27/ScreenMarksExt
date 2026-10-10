@@ -15,7 +15,7 @@ It stores saved scenes locally in `chrome.storage.local`. It does not download v
 - Page-level customizable hotkeys from the extension settings page.
 - Settings page with a storage usage meter for its local `chrome.storage` data.
 - Browser command shortcuts for quick save, range toggle, and library.
-- Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key on the next page load.)
+- Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key when the extension's service worker starts, e.g. after install, update, or browser start.)
 - Library page with search, filters, favorites, edit/delete, copy share text, export, import, a Random pick button, and a batch Open Random that opens any chosen number of random videos in new tabs.
 - Favorites at both levels: star entire videos or individual timestamps from the library, the overlay, or the popup. The library's and overlay's favorites filters include any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.
@@ -103,7 +103,7 @@ To customize browser command shortcuts, open `brave://extensions/shortcuts` or `
 
 SceneMarks content scripts run on all pages (`<all_urls>`) at `document_start`, so generic HTML5 video pages are detected automatically without opening the popup first. The popup-injection path (`activeTab` plus `scripting`) still exists as a fallback for pages where the auto-loaded script could not run.
 
-Generic page support can be disabled in Settings. This only stops generic sites from being detected; it does not change extension permissions.
+Generic page support can be disabled in Settings. This blocks saving, range marking, and next/previous scene hotkeys on generic sites; video detection, the overlay, and queued jumps still run there. It does not change extension permissions.
 
 ## Platform Adapters
 
