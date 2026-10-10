@@ -111,6 +111,9 @@
     let armedDeleteTimer = null;
     let latestState = null;
     let viewMode = "current";
+    // Set when a render skipped the hidden Library tab; it is rebuilt when
+    // the user switches to it.
+    let libraryStale = false;
     let lastRandomPickKey = null;
     let favoritesOnly = false;
     const expandedVideoKeys = new Set();
@@ -194,6 +197,9 @@
       libraryTab.classList.toggle("is-active", viewMode === "library");
       currentPanel.hidden = viewMode !== "current";
       libraryPanel.hidden = viewMode !== "library";
+      if (viewMode === "library" && libraryStale) {
+        renderLibrary(latestState);
+      }
       renderHeader(latestState);
       if (viewMode === "current") {
         applyCurrentHighlight();
@@ -337,7 +343,13 @@
       renderHeader(state);
       renderStatus(state);
       renderCurrentScenes(state);
-      renderLibrary(state);
+      // The Library tab rebuilds every saved video, so it is only built
+      // while visible.
+      if (viewMode === "library") {
+        renderLibrary(state);
+      } else {
+        libraryStale = true;
+      }
       setViewMode(viewMode);
     }
 
@@ -487,6 +499,7 @@
     }
 
     function renderLibrary(state) {
+      libraryStale = false;
       favoritesButton.classList.toggle("is-active", favoritesOnly);
       favoritesButton.setAttribute("aria-pressed", String(favoritesOnly));
 
