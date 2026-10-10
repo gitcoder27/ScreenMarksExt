@@ -304,7 +304,9 @@
     return { ok: true, snapshot };
   }
 
-  async function getContextResponse() {
+  // Only the overlay's Library tab needs the full videos map; the popup's
+  // GET_CONTEXT message would otherwise carry the whole library each open.
+  async function getContextResponse(options) {
     const snapshot = getCurrentSnapshot();
     const state = await Storage.getState();
     const savedVideo = snapshot.videoKey ? state.videos[snapshot.videoKey] || null : null;
@@ -313,7 +315,7 @@
       ok: true,
       context: snapshot,
       video: savedVideo,
-      videos: state.videos,
+      videos: options && options.includeVideos ? state.videos : undefined,
       scenes: savedVideo ? savedVideo.scenes : [],
       activeRangeDraft: state.activeRangeDraft,
       pendingJump: state.pendingJump,
@@ -840,7 +842,7 @@
     document.querySelectorAll(".scenemarks-overlay, .scenemarks-toast").forEach((staleNode) => staleNode.remove());
 
     overlay = SceneMarks.Overlay.createOverlay({
-      getState: guard(getContextResponse),
+      getState: guard(() => getContextResponse({ includeVideos: true })),
       quickSave: guard(() => saveTimestamp({ quick: true })),
       toggleRange: guard(() => toggleRange({ quick: true })),
       seekTo: guard((seconds) => seekTo({ seconds })),
