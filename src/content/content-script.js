@@ -40,6 +40,7 @@
   let settings = null;
   let overlay = null;
   let overlayRefreshTimer = null;
+  let overlayRefreshDeferred = false;
   let pendingJumpTimer = null;
   let contextDead = false;
   let hotkeyListener = null;
@@ -68,6 +69,7 @@
     contextDead = true;
     root.clearTimeout(overlayRefreshTimer);
     root.clearTimeout(pendingJumpTimer);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
     if (stopNavigationWatcher) {
       stopNavigationWatcher();
       stopNavigationWatcher = null;
@@ -699,27 +701,31 @@
   }
 
   function installStorageListener() {
-    chrome.storage.onChanged.addListener(async (changes, areaName) => {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
       if (isContextDead() || areaName !== "local" || !changes.scenemarksState) {
         return;
       }
 
-      try {
-        await loadSettings();
-        if (overlay) {
-          overlay.setEnabled(getSettingsSync().enableFloatingButton);
-          scheduleOverlayRefresh(100);
-        }
-      } catch (error) {
-        if (isInvalidContextError(error)) {
-          tearDownDeadContext();
-        }
+      // Every write reaches every tab, so take the settings from the change
+      // itself instead of re-reading and normalizing the whole library.
+      const nextState = changes.scenemarksState.newValue;
+      settings = SceneMarks.Schema.normalizeSettings(nextState && nextState.settings);
+      if (overlay) {
+        overlay.setEnabled(settings.enableFloatingButton);
+        scheduleOverlayRefresh(100);
       }
     });
   }
 
   function scheduleOverlayRefresh(delayMs) {
     root.clearTimeout(overlayRefreshTimer);
+    // Background tabs skip the storage read + rebuild and catch up once
+    // they are shown again.
+    if (document.hidden) {
+      overlayRefreshDeferred = true;
+      return;
+    }
+
     overlayRefreshTimer = root.setTimeout(() => {
       if (!overlay || isContextDead()) {
         return;
@@ -731,6 +737,13 @@
         }
       });
     }, Number.isFinite(delayMs) ? delayMs : 250);
+  }
+
+  function handleVisibilityChange() {
+    if (!document.hidden && overlayRefreshDeferred) {
+      overlayRefreshDeferred = false;
+      scheduleOverlayRefresh(0);
+    }
   }
 
   function schedulePendingJumpCheck(delayMs) {
@@ -817,6 +830,7 @@
     stopNavigationWatcher = installNavigationWatcher();
     installPageHotkeys();
     installStorageListener();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     await initOverlay();
     schedulePendingJumpCheck(1000);
   }

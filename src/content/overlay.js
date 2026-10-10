@@ -286,11 +286,14 @@
     }
 
     function setEnabled(enabled) {
+      const wasShown = host.isConnected && !host.hidden;
       host.hidden = !enabled;
       if (enabled && !host.isConnected) {
         document.documentElement.append(host);
       }
-      if (enabled) {
+      // The setting is re-applied on every storage change; only showing a
+      // hidden panel needs a refresh here; callers schedule their own.
+      if (enabled && !wasShown) {
         refresh();
       }
     }
