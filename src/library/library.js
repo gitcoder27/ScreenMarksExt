@@ -9,6 +9,9 @@
   let state = null;
   let searchRenderTimer = null;
   const expandedVideoKeys = new Set();
+  // The filtered videos from the last render, so a collapsed card can build
+  // its scene rows when it is first expanded.
+  const renderedVideos = new Map();
 
   function byId(id) {
     return document.getElementById(id);
@@ -175,6 +178,8 @@
     );
 
     clearNode(elements.libraryList);
+    renderedVideos.clear();
+    videos.forEach((video) => renderedVideos.set(video.videoKey, video));
     elements.summaryBox.textContent = `${videos.length} videos, ${sceneCount} scenes`
       + (favoriteVideoCount ? `, ${favoriteVideoCount} favorited videos` : "")
       + (favoriteSceneCount ? `, ${favoriteSceneCount} favorited timestamps` : "");
@@ -357,10 +362,19 @@
 
     const sceneTable = createElement("div", "scene-table");
     sceneTable.hidden = isCollapsed;
-    video.scenes.forEach((scene) => sceneTable.append(renderScene(video, scene)));
+    // Rows are built on first expand: building every row of every collapsed
+    // card made each re-render slow on large libraries.
+    if (!isCollapsed) {
+      fillSceneTable(sceneTable, video);
+    }
     card.append(sceneTable);
 
     return card;
+  }
+
+  function fillSceneTable(sceneTable, video) {
+    sceneTable.dataset.filled = "true";
+    video.scenes.forEach((scene) => sceneTable.append(renderScene(video, scene)));
   }
 
   function isVideoCollapsed(videoKey) {
@@ -384,6 +398,12 @@
 
     const isCollapsed = !expandedVideoKeys.has(videoKey);
     card.classList.toggle("is-collapsed", isCollapsed);
+
+    const sceneTable = card.querySelector(".scene-table");
+    const video = renderedVideos.get(videoKey);
+    if (!isCollapsed && sceneTable && !sceneTable.dataset.filled && video) {
+      fillSceneTable(sceneTable, video);
+    }
 
     const titleButton = card.querySelector(".video-title-button");
     if (titleButton) {
@@ -510,8 +530,6 @@
     if (!action.ok) {
       return;
     }
-
-    await loadState();
   }
 
   async function deleteScene(video, scene) {
@@ -530,8 +548,6 @@
     if (!action.ok) {
       return;
     }
-
-    await loadState();
   }
 
   async function editScene(videoKey, scene) {
@@ -549,8 +565,6 @@
     if (!action.ok) {
       return;
     }
-
-    await loadState();
   }
 
   async function toggleVideoFavorite(videoKey, favorite) {
@@ -568,7 +582,6 @@
     elements.summaryBox.textContent = favorite
       ? "Video added to favorites."
       : "Video removed from favorites.";
-    await loadState();
   }
 
   async function toggleFavorite(videoKey, scene) {
@@ -576,8 +589,6 @@
     if (!action.ok) {
       return;
     }
-
-    await loadState();
   }
 
   async function copyShareText(video, scene) {
@@ -647,10 +658,20 @@
   }
 
   function installStorageSync() {
+    // This is the only re-render path after a mutation. The page shows only
+    // videos, so writes that leave them untouched (another tab's pending
+    // jump, range draft, settings) skip the full rebuild.
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName === "local" && changes.scenemarksState) {
-        loadState();
+      if (areaName !== "local" || !changes.scenemarksState) {
+        return;
       }
+
+      const { oldValue, newValue } = changes.scenemarksState;
+      if (oldValue && newValue && JSON.stringify(oldValue.videos) === JSON.stringify(newValue.videos)) {
+        return;
+      }
+
+      loadState();
     });
   }
 
