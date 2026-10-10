@@ -40,6 +40,7 @@
   function scoreVideo(video) {
     const rect = video.getBoundingClientRect();
     const area = rect.width * rect.height;
+    const visible = isVisible(video);
     let score = 0;
 
     if (isFiniteDuration(video) && video.duration > MIN_MAIN_VIDEO_SECONDS) {
@@ -54,7 +55,7 @@
       score += 30;
     }
 
-    if (isVisible(video)) {
+    if (visible) {
       score += 20;
     }
 
@@ -70,7 +71,7 @@
       score -= 50;
     }
 
-    if (!isVisible(video) || area < 2000) {
+    if (!visible || area < 2000) {
       score -= 50;
     }
 
@@ -249,6 +250,29 @@
       }, SCAN_THROTTLE_MS);
     }
 
+    function isOwnMutation(record) {
+      const target = record.target;
+      return target.nodeType === 1 && Boolean(target.closest(".scenemarks-overlay, .scenemarks-toast"));
+    }
+
+    // Each scan forces layout for every <video>, and pages like Netflix and
+    // YouTube mutate the DOM constantly during playback (captions, player
+    // chrome). While the bound video is still attached and playing, DOM
+    // churn cannot have replaced it: a new <video> announces itself through
+    // loadedmetadata/emptied, and identity changes are re-derived on every
+    // media event. The overlay's own re-renders are never page changes.
+    function handleMutations(records) {
+      if (records.every(isOwnMutation)) {
+        return;
+      }
+
+      if (activeVideo && activeVideo.isConnected && !activeVideo.paused && !activeVideo.ended) {
+        return;
+      }
+
+      scheduleScan();
+    }
+
     function getSnapshot() {
       const video = findActiveVideo();
       if (video !== activeVideo) {
@@ -326,7 +350,7 @@
 
     function start() {
       scheduleScan();
-      observer = new MutationObserver(scheduleScan);
+      observer = new MutationObserver(handleMutations);
       observer.observe(document.documentElement, { childList: true, subtree: true });
       scanTriggerEvents.forEach((eventName) => {
         root.addEventListener(eventName, scheduleScan, true);
