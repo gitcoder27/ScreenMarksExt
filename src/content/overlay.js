@@ -103,6 +103,8 @@
     // The Popover API lifts toasts above fullscreen players; without it the
     // plain fixed-position toast still works outside fullscreen.
     const supportsToastPopover = typeof toast.showPopover === "function";
+    // The fullscreen element the open toast popover was last raised above.
+    let toastRaisedOver = null;
     // Two-step delete state: which scene's delete button is armed, plus its
     // auto-disarm timer.
     let armedDelete = null;
@@ -212,19 +214,28 @@
     }
 
     // Fullscreen players render only the fullscreen element, which paints
-    // above top-layer entries inserted before it. Re-showing the popover on
-    // every toast re-inserts it at the end of that order, so it stays visible
-    // even over a player that entered fullscreen after the previous toast.
+    // above top-layer entries inserted before it. Re-showing the popover
+    // re-inserts it at the end of that order, so it stays visible even over a
+    // player that entered fullscreen after the previous toast. It is only
+    // re-shown when that order is actually stale: each hide/show over a
+    // fullscreen video churns the top layer and can flash a frame.
     function raiseToastLayer() {
       if (!supportsToastPopover) {
         return;
       }
 
+      const fullscreenElement = document.fullscreenElement || null;
       try {
-        if (toast.matches(":popover-open")) {
+        const isOpen = toast.matches(":popover-open");
+        if (isOpen && toastRaisedOver === fullscreenElement) {
+          return;
+        }
+
+        if (isOpen) {
           toast.hidePopover();
         }
         toast.showPopover();
+        toastRaisedOver = fullscreenElement;
       } catch (_error) {
         // The toast still shows on normal pages without the top layer.
       }
@@ -256,13 +267,21 @@
       root.clearTimeout(toastTimer);
       root.clearTimeout(toastLayerTimer);
       raiseToastLayer();
-      toast.className = `scenemarks-toast is-${kind}`;
+      const wasVisible = toast.classList.contains("is-visible");
+      toast.className = `scenemarks-toast is-${kind} is-visible`;
       toastIcon.textContent = TOAST_ICONS[kind];
       toastMessage.textContent = message || "";
-      // Reading offsetWidth restarts the entrance transition when a new
-      // toast replaces one that is still visible.
-      void toast.offsetWidth;
-      toast.classList.add("is-visible");
+      // Replay the entrance when a new toast replaces a visible one. WAAPI
+      // avoids the forced synchronous layout of the offsetWidth trick.
+      if (wasVisible && typeof toast.animate === "function") {
+        toast.animate(
+          [
+            { opacity: 0, transform: "translate(-50%, -10px)" },
+            { opacity: 1, transform: "translate(-50%, 0)" }
+          ],
+          { duration: 180, easing: "ease" }
+        );
+      }
       toastTimer = root.setTimeout(hideToast, TOAST_AUTO_HIDE_MS);
     }
 
