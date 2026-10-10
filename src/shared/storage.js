@@ -145,57 +145,65 @@
     }) || null;
   }
 
-  async function saveScene(identity, sceneInput, options) {
-    const opts = options || {};
-    const input = sceneInput || {};
-    const normalizedIdentity = normalizeIdentity(identity);
-    const scene = normalizeScene({
+  function createScene(input) {
+    return normalizeScene({
       ...input,
       id: input.id || SceneMarks.Ids.createId("scene"),
       createdAt: input.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
+  }
 
-    if (!normalizedIdentity || !scene) {
-      return { ok: false, error: "Invalid scene data." };
+  // Runs inside an updateState mutator. savedScene is null when a nearby
+  // duplicate blocked the insert.
+  function insertScene(draftState, normalizedIdentity, scene, allowDuplicate) {
+    const video = upsertVideo(draftState, normalizedIdentity);
+    const threshold = draftState.settings.duplicateThresholdSeconds;
+    const duplicateScene = findDuplicateScene(video, scene, threshold);
+
+    if (duplicateScene && !allowDuplicate) {
+      return { savedScene: null, duplicateScene, video };
     }
 
-    let savedScene = null;
-    let duplicateScene = null;
-    let savedVideo = null;
+    video.scenes = sortScenes([...video.scenes, scene]);
+    video.updatedAt = new Date().toISOString();
+    return { savedScene: scene, duplicateScene, video };
+  }
 
-    const state = await updateState((draftState) => {
-      const video = upsertVideo(draftState, normalizedIdentity);
-      const threshold = draftState.settings.duplicateThresholdSeconds;
-      duplicateScene = findDuplicateScene(video, scene, threshold);
-
-      if (duplicateScene && !opts.allowDuplicate) {
-        savedVideo = video;
-        return draftState;
-      }
-
-      video.scenes = sortScenes([...video.scenes, scene]);
-      video.updatedAt = new Date().toISOString();
-      savedScene = scene;
-      savedVideo = video;
-      return draftState;
-    });
-
-    if (duplicateScene && !opts.allowDuplicate) {
+  function insertSceneResult(outcome, state, videoKey) {
+    if (!outcome.savedScene) {
       return {
         ok: false,
         duplicate: true,
-        scene: duplicateScene,
-        video: savedVideo || state.videos[normalizedIdentity.videoKey],
+        scene: outcome.duplicateScene,
+        video: outcome.video || state.videos[videoKey],
         error: "A nearby scene already exists"
       };
     }
 
     return {
       ok: true,
-      scene: savedScene,
-      video: savedVideo || state.videos[normalizedIdentity.videoKey]
+      scene: outcome.savedScene,
+      video: outcome.video || state.videos[videoKey]
     };
+  }
+
+  async function saveScene(identity, sceneInput, options) {
+    const opts = options || {};
+    const normalizedIdentity = normalizeIdentity(identity);
+    const scene = createScene(sceneInput || {});
+
+    if (!normalizedIdentity || !scene) {
+      return { ok: false, error: "Invalid scene data." };
+    }
+
+    let outcome = null;
+    const state = await updateState((draftState) => {
+      outcome = insertScene(draftState, normalizedIdentity, scene, opts.allowDuplicate);
+      return draftState;
+    });
+
+    return insertSceneResult(outcome, state, normalizedIdentity.videoKey);
   }
 
   async function startRange(identity, startSeconds, options) {
@@ -250,41 +258,52 @@
       return { ok: false, error: "Cannot end a range without a detected video time." };
     }
 
-    const state = await getState();
-    const draft = state.activeRangeDraft;
+    // The draft is read, the range saved and the draft cleared in one
+    // queued write, so no other write can land in between and every tab
+    // gets one storage.onChanged instead of two.
+    let outcome = null;
+    let invalidScene = false;
+    const state = await updateState((draftState) => {
+      const draft = draftState.activeRangeDraft;
+      if (!draft || draft.videoKey !== normalizedIdentity.videoKey) {
+        return SKIP_WRITE;
+      }
 
-    if (!draft || draft.videoKey !== normalizedIdentity.videoKey) {
-      return { ok: false, error: "No range start is active for this video." };
-    }
-
-    const start = Math.min(draft.startSeconds, seconds);
-    const end = Math.max(draft.startSeconds, seconds);
-    const result = await saveScene(
-      normalizedIdentity,
-      {
+      const scene = createScene({
         type: "range",
-        startSeconds: start,
-        endSeconds: end,
+        startSeconds: Math.min(draft.startSeconds, seconds),
+        endSeconds: Math.max(draft.startSeconds, seconds),
         note: sceneDetails && sceneDetails.note,
         tags: sceneDetails && sceneDetails.tags,
         favorite: sceneDetails && sceneDetails.favorite
-      },
-      { allowDuplicate: sceneDetails && sceneDetails.allowDuplicate === true }
-    );
+      });
+      if (!scene) {
+        invalidScene = true;
+        return SKIP_WRITE;
+      }
 
-    if (!result.ok) {
-      return result;
-    }
-
-    await updateState((draftState) => {
-      if (draftState.activeRangeDraft && draftState.activeRangeDraft.videoKey === draft.videoKey) {
+      outcome = insertScene(
+        draftState,
+        normalizedIdentity,
+        scene,
+        sceneDetails && sceneDetails.allowDuplicate === true
+      );
+      if (outcome.savedScene) {
         draftState.activeRangeDraft = null;
       }
 
       return draftState;
     });
 
-    return result;
+    if (invalidScene) {
+      return { ok: false, error: "Invalid scene data." };
+    }
+
+    if (!outcome) {
+      return { ok: false, error: "No range start is active for this video." };
+    }
+
+    return insertSceneResult(outcome, state, normalizedIdentity.videoKey);
   }
 
   async function deleteScene(videoKey, sceneId) {

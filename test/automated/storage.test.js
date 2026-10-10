@@ -177,6 +177,44 @@ test("endRange fails without an active draft for the video", async () => {
   assert.equal(result.ok, false);
 });
 
+test("endRange saves the range and clears the draft in a single write", async () => {
+  await Storage.startRange(IDENTITY, 100);
+  const writesBefore = store.writes;
+
+  const result = await Storage.endRange(IDENTITY, 140);
+
+  assert.equal(result.ok, true);
+  assert.equal(store.writes - writesBefore, 1);
+  const state = store.readState();
+  assert.equal(state.activeRangeDraft, null);
+  assert.equal(state.videos[IDENTITY.videoKey].scenes.length, 1);
+});
+
+test("endRange does not write when no draft matches the video", async () => {
+  await Storage.startRange(OTHER_IDENTITY, 100);
+  const writesBefore = store.writes;
+
+  const result = await Storage.endRange(IDENTITY, 140);
+
+  assert.equal(result.ok, false);
+  assert.equal(store.writes, writesBefore);
+  assert.equal(store.readState().activeRangeDraft.videoKey, OTHER_IDENTITY.videoKey);
+});
+
+test("endRange keeps the draft when a near-duplicate range blocks the save", async () => {
+  await Storage.startRange(IDENTITY, 100);
+  await Storage.endRange(IDENTITY, 140);
+  await Storage.startRange(IDENTITY, 101);
+
+  const result = await Storage.endRange(IDENTITY, 141);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.duplicate, true);
+  const state = store.readState();
+  assert.equal(state.videos[IDENTITY.videoKey].scenes.length, 1);
+  assert.equal(state.activeRangeDraft.startSeconds, 101);
+});
+
 test("pending jumps are consumed once and only by the matching video", async () => {
   await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 10 });
   const stateBefore = store.readState();
