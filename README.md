@@ -2,7 +2,7 @@
 
 SceneMarks is a local-first Chromium extension for saving timestamp bookmarks and scene ranges from HTML5 streaming video pages.
 
-It stores saved scenes locally in `chrome.storage.local`. It does not download video, record video or audio, capture screenshots, inspect cookies, bypass DRM, send analytics, or use a backend server.
+It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#data-storage)). It does not download video, record video or audio, capture screenshots, inspect cookies, bypass DRM, send analytics, or use a backend server.
 
 ## What Is Implemented
 
@@ -13,13 +13,13 @@ It stores saved scenes locally in `chrome.storage.local`. It does not download v
 - Popup controls for save, range start/end, jump, edit, and delete, with the popup delete using the same two-step arm-then-confirm interaction as the overlay.
 - Optional always-visible draggable overlay panel with Current and Library views.
 - Page-level customizable hotkeys from the extension settings page.
-- Settings page with a storage usage meter for its local `chrome.storage` data.
+- Settings page showing how much local `chrome.storage` space SceneMarks uses.
 - Browser command shortcuts for quick save, range toggle, and library.
 - Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key when the extension is installed or updated, when the browser starts, and after an import.)
 - Library page with search, filters, favorites, edit/delete, copy share text, export, import, a Random pick button, and a batch Open Random that opens a chosen number of random videos (up to 10 at a time) in new tabs.
 - Favorites at both levels: star entire videos or individual timestamps from the library, the overlay, or the popup. The library's and overlay's favorites filters include any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.
-- Permissions: `storage`, `activeTab`, `scripting`, and `tabs`, plus an `<all_urls>` host permission so content scripts (video detection, overlay, queued jumps) run on every page without popup activation.
+- Permissions: `storage`, `unlimitedStorage`, `activeTab`, `scripting`, and `tabs`, plus an `<all_urls>` host permission so content scripts (video detection, overlay, queued jumps) run on every page without popup activation. `unlimitedStorage` lifts the 10 MB `chrome.storage.local` cap; Chrome shows no permission warning for it.
 
 ## Install In Brave
 
@@ -117,9 +117,27 @@ Adapters only normalize video identity and titles. They do not access media stre
 
 Streaming services change player and URL behavior often. SceneMarks uses best-effort DOM/video interaction and may need adapter updates later.
 
+## Data Storage
+
+Everything stays in this browser profile's `chrome.storage.local`, split so that a change rewrites only what it touches:
+
+| Key | Holds |
+|---|---|
+| `video:<videoKey>` | One saved video: its identity, up to five recent page URLs, its favorite flag and its scenes |
+| `settings` | Settings and page hotkeys |
+| `activeRangeDraft` | A started, unfinished range (dropped after 24 hours) |
+| `pendingJump` | A jump queued for a video opening in a new tab (dropped after 15 minutes) |
+| `schemaVersion` | The storage layout version, currently 2 |
+
+Saving, editing or favoriting a scene writes only that video's key, so every open tab is told about one video instead of the whole library, and the cost of a save does not grow with the library. All writes run in the service worker, one at a time.
+
+Versions before schema 2 kept everything in one `scenemarksState` key. When the extension is installed or updated, when the browser starts, and after an import, SceneMarks moves that data into the keys above, then deletes the old key. The move is safe to repeat: if it fails, the old key stays for the next attempt, and once it is done it writes nothing.
+
+Library exports are a single JSON object (`schemaVersion`, `videos`, `settings`, ...) whatever the storage layout, and import accepts exports from any version.
+
 ## Automated Tests
 
-The shared data layer — schema normalization, storage behavior, and time formatting — has dependency-free tests using Node's built-in test runner:
+The shared data layer — schema normalization, storage behavior (including which keys each write touches), the storage migrations, and time formatting — has dependency-free tests using Node's built-in test runner:
 
 ```
 node --test test/automated/*.test.js
@@ -144,7 +162,7 @@ Do this first on a normal HTML5 video before trying streaming sites:
    - **Jump** seeks to the saved timestamp.
    - **Edit** and **Delete** work.
    - The star beside a saved scene in the popup toggles its favorite state.
-7. Open Library and confirm search plus export/import.
+7. Open Library and confirm search plus export/import, and that a save in another tab shows up without reloading the library page.
 8. Favorite a video from its card header (works while collapsed) and a timestamp from its row, then check **Favorites only**: both videos appear — the favorited video with all its scenes, the other with only the favorited timestamp.
 9. In the overlay, toggle **Favorites** in the Library view and confirm the same filtering, then press **Random** to shuffle within the favorites.
 
