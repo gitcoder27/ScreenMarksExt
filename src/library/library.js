@@ -626,6 +626,8 @@
     }
   }
 
+  // The export keeps the single-object shape ({ schemaVersion, videos,
+  // settings, ... }) whatever the storage layout, so any version imports it.
   async function exportData() {
     const exportState = await Storage.getState();
     const blob = new Blob([JSON.stringify(exportState, null, 2)], { type: "application/json" });
@@ -651,41 +653,70 @@
       return;
     }
 
+    // The imported videos arrive through storage.onChanged like any write.
     const action = await runStorageAction(() => Storage.importState(parsed, { merge: true }));
     if (!action.ok) {
       return;
     }
 
     elements.importInput.value = "";
-    await loadState();
-    elements.summaryBox.textContent = "Import complete.";
+    elements.summaryBox.textContent = `Import complete: ${action.value.videoCount} videos.`;
   }
 
+  let loadingState = false;
+  let changedWhileLoading = false;
+
   async function loadState() {
+    loadingState = true;
+    changedWhileLoading = false;
     const action = await runStorageAction(() => Storage.getState());
+    loadingState = false;
     if (!action.ok) {
       return;
     }
 
     state = action.value;
     render();
+    // A change that landed during the read may or may not be in it.
+    if (changedWhileLoading) {
+      loadState();
+    }
   }
 
   function installStorageSync() {
-    // This is the only re-render path after a mutation. The page shows only
-    // videos, so writes that leave them untouched (another tab's pending
-    // jump, range draft, settings) skip the full rebuild.
+    // This is the only re-render path after a mutation. Storage is split
+    // per video, so a change carries just the videos it touched: they are
+    // patched in from newValue, with no re-read. Writes that leave videos
+    // untouched (pending jump, range draft, settings) skip the rebuild.
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== "local" || !changes.scenemarksState) {
+      if (areaName !== "local") {
         return;
       }
 
-      const { oldValue, newValue } = changes.scenemarksState;
-      if (oldValue && newValue && JSON.stringify(oldValue.videos) === JSON.stringify(newValue.videos)) {
+      const videoChanges = Object.keys(changes).filter(SceneMarks.Storage.isVideoStorageKey);
+      if (!videoChanges.length) {
         return;
       }
 
-      loadState();
+      if (loadingState) {
+        changedWhileLoading = true;
+        return;
+      }
+
+      if (!state) {
+        loadState();
+        return;
+      }
+
+      videoChanges.forEach((key) => {
+        const video = SceneMarks.Schema.normalizeVideo(changes[key].newValue);
+        if (video) {
+          state.videos[video.videoKey] = video;
+        } else {
+          delete state.videos[SceneMarks.Storage.videoKeyFromStorageKey(key)];
+        }
+      });
+      render();
     });
   }
 

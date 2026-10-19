@@ -136,8 +136,7 @@
   }
 
   async function loadLocalSettings() {
-    const state = await Storage.getState();
-    latestSettings = state.settings;
+    latestSettings = await Storage.getSettings();
     renderOverlayToggle();
   }
 

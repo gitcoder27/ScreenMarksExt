@@ -167,8 +167,7 @@
   }
 
   async function loadSettings() {
-    const state = await Storage.getState();
-    const settings = state.settings;
+    const settings = await Storage.getSettings();
 
     elements.enableFloatingButton.checked = settings.enableFloatingButton;
     elements.quickSaveRequiresNote.checked = settings.quickSaveRequiresNote;
