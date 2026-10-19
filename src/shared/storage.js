@@ -43,6 +43,10 @@
     return typeof key === "string" && key.startsWith(VIDEO_KEY_PREFIX);
   }
 
+  function videoKeyFromStorageKey(key) {
+    return key.slice(VIDEO_KEY_PREFIX.length);
+  }
+
   function getChromeStorage() {
     if (!root.chrome || !root.chrome.storage || !root.chrome.storage.local) {
       throw new Error("chrome.storage.local is unavailable");
@@ -258,7 +262,7 @@
     const keys = typeof getChromeStorage().getKeys === "function"
       ? await callStorage("getKeys")
       : Object.keys(await chromeGet(null));
-    return keys.filter(isVideoStorageKey).map((key) => key.slice(VIDEO_KEY_PREFIX.length));
+    return keys.filter(isVideoStorageKey).map(videoKeyFromStorageKey);
   }
 
   function upsertVideo(state, identity) {
@@ -850,6 +854,7 @@
     updateSettings,
     updateState,
     upsertVideo,
+    videoKeyFromStorageKey,
     videoStorageKey
   };
 
