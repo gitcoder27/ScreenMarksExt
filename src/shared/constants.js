@@ -11,6 +11,9 @@
   // An armed delete reverts on its own so a much later second click can never
   // delete a row the user armed and forgot about.
   const ARMED_DELETE_TIMEOUT_MS = 5000;
+  // Batch Open Random opens each pick in its own tab, and every tab loads a
+  // full streaming site at once, so one batch is capped.
+  const MAX_RANDOM_OPEN_COUNT = 10;
 
   const DEFAULT_SETTINGS = Object.freeze({
     enableFloatingButton: true,
@@ -57,6 +60,7 @@
     ARMED_DELETE_TIMEOUT_MS,
     DEFAULT_SETTINGS,
     MAX_NOTE_LENGTH,
+    MAX_RANDOM_OPEN_COUNT,
     MAX_TAG_LENGTH,
     MAX_TAGS,
     MESSAGE_TYPES,

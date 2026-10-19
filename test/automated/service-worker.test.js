@@ -34,6 +34,7 @@ function loadWorker(seedState) {
     }
   });
   const store = { reads: 0, writes: 0, value: JSON.parse(JSON.stringify(seedState)) };
+  const openedTabs = [];
 
   const context = vm.createContext({ console, crypto, setImmediate, setTimeout, clearTimeout, URL });
   context.importScripts = (...files) => {
@@ -51,6 +52,12 @@ function loadWorker(seedState) {
       onMessage: event("onMessage")
     },
     commands: { onCommand: event("onCommand") },
+    tabs: {
+      query: async () => [],
+      create: async (options) => {
+        openedTabs.push(options);
+      }
+    },
     storage: {
       local: {
         get(_keys, callback) {
@@ -68,7 +75,7 @@ function loadWorker(seedState) {
 
   const file = path.join(WORKER_DIR, "service-worker.js");
   vm.runInContext(fs.readFileSync(file, "utf8"), context, { filename: file });
-  return { listeners, store };
+  return { listeners, openedTabs, store };
 }
 
 function settle() {
@@ -107,4 +114,28 @@ test("an import of legacy data is migrated right after it lands", async () => {
 
   await settle();
   assert.deepEqual(Object.keys(store.value.videos), [MIGRATED_KEY]);
+});
+
+test("a batch Open Random opens at most the capped number of tabs", async () => {
+  const videos = {};
+  for (let index = 0; index < 15; index += 1) {
+    const id = `video${String(index).padStart(6, "0")}`;
+    videos[`youtube:${id}`] = {
+      ...legacyVideo(),
+      videoKey: `youtube:${id}`,
+      platform: "youtube",
+      canonicalUrl: `https://www.youtube.com/watch?v=${id}`,
+      rawUrls: []
+    };
+  }
+  const { listeners, openedTabs } = loadWorker({ videos });
+
+  const response = await new Promise((resolve) => {
+    listeners.onMessage[0]({ type: "SCENEMARKS_OPEN_RANDOM_VIDEOS", payload: { count: 50 } }, {}, resolve);
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.openedCount, 10);
+  assert.equal(response.requestedCount, 10);
+  assert.equal(openedTabs.length, 10);
 });

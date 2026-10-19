@@ -337,6 +337,8 @@ async function openRandomVideos(payload) {
     return { ok: false, error: "Choose how many videos to open (1 or more)." };
   }
 
+  const count = Math.min(requested, SceneMarks.Constants.MAX_RANDOM_OPEN_COUNT);
+
   const state = await SceneMarks.Storage.getState();
   let videos = Object.values(state.videos);
 
@@ -355,7 +357,7 @@ async function openRandomVideos(payload) {
     return { ok: false, error: "Every matching video is already open in a tab in this window." };
   }
 
-  const picked = sampleRandom(candidates, requested);
+  const picked = sampleRandom(candidates, count);
   for (const video of picked) {
     await chrome.tabs.create({ url: video.canonicalUrl || video.rawUrls[0], active: false });
   }
@@ -363,7 +365,7 @@ async function openRandomVideos(payload) {
   return {
     ok: true,
     openedCount: picked.length,
-    requestedCount: requested,
+    requestedCount: count,
     videos: picked.map((video) => ({ videoKey: video.videoKey, title: video.title }))
   };
 }
