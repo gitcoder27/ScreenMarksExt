@@ -170,6 +170,8 @@
   function createVideoDetector(options) {
     const onContextChange = options && options.onContextChange;
     const onPlaybackTick = options && options.onPlaybackTick;
+    const isAlive = options && options.isAlive;
+    const onDead = options && options.onDead;
     let activeVideo = null;
     let observer = null;
     let scanTimer = null;
@@ -240,14 +242,32 @@
     // starve scans indefinitely. At most one run is ever pending; mutations
     // that land while it waits for its slot are picked up by the next trigger.
     function scheduleScan() {
-      if (scanTimer !== null) {
+      if (scanTimer !== null || stopIfDead()) {
         return;
       }
 
       scanTimer = root.setTimeout(() => {
         scanTimer = null;
-        bindVideo(findActiveVideo());
+        if (!stopIfDead()) {
+          bindVideo(findActiveVideo());
+        }
       }, SCAN_THROTTLE_MS);
+    }
+
+    // After an extension reload or update, an orphaned copy on a page with
+    // no video (or a paused one) never fires a consumer callback, so the
+    // consumer cannot notice it is dead; the scan path checks for itself.
+    function stopIfDead() {
+      if (typeof isAlive !== "function" || isAlive()) {
+        return false;
+      }
+
+      if (typeof onDead === "function") {
+        onDead();
+      } else {
+        stop();
+      }
+      return true;
     }
 
     function isOwnMutation(record) {

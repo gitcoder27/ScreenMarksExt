@@ -64,18 +64,79 @@ class FakeVideo extends EventTarget {
 }
 
 let video;
+let videoScans;
 
-function loadDetector() {
+// Records the observer the detector creates so tests can feed it mutations.
+class FakeMutationObserver {
+  constructor(callback) {
+    this.callback = callback;
+    this.disconnected = false;
+    FakeMutationObserver.last = this;
+  }
+
+  observe() {}
+
+  disconnect() {
+    this.disconnected = true;
+  }
+}
+
+function loadDetector(options) {
   delete globalThis.SceneMarks;
+  videoScans = 0;
   globalThis.HTMLMediaElement = { HAVE_METADATA: 1 };
   globalThis.innerWidth = 1920;
   globalThis.innerHeight = 1080;
   globalThis.getComputedStyle = () => ({ display: "block", visibility: "visible", opacity: "1" });
-  globalThis.document = { querySelectorAll: () => [video] };
+  globalThis.MutationObserver = FakeMutationObserver;
+  globalThis.addEventListener = () => {};
+  globalThis.removeEventListener = () => {};
+  globalThis.document = {
+    documentElement: {},
+    querySelectorAll: () => {
+      videoScans += 1;
+      return [video];
+    }
+  };
   const file = path.join(__dirname, "..", "..", "src", "content", "video-detector.js");
   vm.runInThisContext(fs.readFileSync(file, "utf8"), { filename: "src/content/video-detector.js" });
-  return globalThis.SceneMarks.VideoDetector.createVideoDetector({});
+  return globalThis.SceneMarks.VideoDetector.createVideoDetector(options || {});
 }
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const PAGE_MUTATION = { target: { nodeType: 1, closest: () => null } };
+
+test("an orphaned detector stops scanning once its extension context is gone", async () => {
+  let alive = true;
+  let deadCalls = 0;
+  const detector = loadDetector({
+    isAlive: () => alive,
+    onDead: () => {
+      deadCalls += 1;
+      detector.stop();
+    }
+  });
+  video.paused = true;
+  detector.start();
+  await wait(450);
+  assert.equal(videoScans, 1);
+
+  // A mutation schedules a scan; the context dies before it runs.
+  FakeMutationObserver.last.callback([PAGE_MUTATION]);
+  alive = false;
+  await wait(450);
+  assert.equal(videoScans, 1);
+  assert.equal(deadCalls, 1);
+  assert.equal(FakeMutationObserver.last.disconnected, true);
+
+  // Mutations that still arrive never schedule another scan.
+  FakeMutationObserver.last.callback([PAGE_MUTATION]);
+  await wait(450);
+  assert.equal(videoScans, 1);
+});
 
 beforeEach(() => {
   video = new FakeVideo();

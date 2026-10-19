@@ -128,7 +128,11 @@
 
   // After an extension reload or auto-update, this copy's detector keeps
   // firing in old tabs; the first callback that notices tears it all down.
+  // Pages without a playing video never fire these callbacks, so the
+  // detector's own scan path checks isAlive too.
   const detector = SceneMarks.VideoDetector.createVideoDetector({
+    isAlive: () => !isContextDead(),
+    onDead: () => tearDownDeadContext(),
     onContextChange: () => {
       if (isContextDead()) {
         tearDownDeadContext();
