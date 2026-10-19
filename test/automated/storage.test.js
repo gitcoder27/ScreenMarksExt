@@ -134,14 +134,43 @@ test("deleteVideo removes the video", async () => {
   assert.equal(store.readState().videos[IDENTITY.videoKey], undefined);
 });
 
-test("startRange creates a draft and the video entry", async () => {
+test("startRange creates a draft without an empty video entry", async () => {
   const result = await Storage.startRange(IDENTITY, 100);
 
   assert.equal(result.ok, true);
   const state = store.readState();
   assert.equal(state.activeRangeDraft.videoKey, IDENTITY.videoKey);
   assert.equal(state.activeRangeDraft.startSeconds, 100);
-  assert.ok(state.videos[IDENTITY.videoKey]);
+  // The video is created when the range is saved, so an abandoned range
+  // leaves nothing behind.
+  assert.equal(state.videos[IDENTITY.videoKey], undefined);
+
+  await Storage.endRange(IDENTITY, 140);
+  assert.equal(store.readState().videos[IDENTITY.videoKey].scenes.length, 1);
+});
+
+test("mutations that change nothing do not write", async () => {
+  const saved = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 10 });
+  await Storage.startRange(OTHER_IDENTITY, 50);
+  const writesBefore = store.writes;
+
+  // Every write reaches every open tab, so a no-op must not rewrite state.
+  await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 11 });
+  await Storage.startRange(IDENTITY, 20);
+  await Storage.deleteScene(IDENTITY.videoKey, "scene_missing");
+  await Storage.deleteScene("netflix:missing", saved.scene.id);
+  await Storage.updateScene(IDENTITY.videoKey, "scene_missing", { favorite: true });
+  await Storage.updateVideo("netflix:missing", { favorite: true });
+  await Storage.deleteVideo("netflix:missing");
+  await Storage.clearPendingJump();
+  await Storage.consumePendingJump(IDENTITY.videoKey);
+  const settings = await Storage.updateSettings({ duplicateThresholdSeconds: 3 });
+
+  assert.equal(store.writes, writesBefore);
+  assert.equal(settings.duplicateThresholdSeconds, 3);
+  const state = store.readState();
+  assert.equal(state.videos[IDENTITY.videoKey].scenes.length, 1);
+  assert.equal(state.activeRangeDraft.videoKey, OTHER_IDENTITY.videoKey);
 });
 
 test("startRange conflicts across videos unless overwrite is set", async () => {

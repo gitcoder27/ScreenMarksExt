@@ -200,7 +200,7 @@
     let outcome = null;
     const state = await updateState((draftState) => {
       outcome = insertScene(draftState, normalizedIdentity, scene, opts.allowDuplicate);
-      return draftState;
+      return outcome.savedScene ? draftState : SKIP_WRITE;
     });
 
     return insertSceneResult(outcome, state, normalizedIdentity.videoKey);
@@ -222,16 +222,16 @@
       createdAt: new Date().toISOString()
     };
 
+    // The video record is created when the range is saved (endRange), so an
+    // abandoned range leaves no empty video behind.
     await updateState((state) => {
-      upsertVideo(state, normalizedIdentity);
-
       if (
         state.activeRangeDraft &&
         state.activeRangeDraft.videoKey !== normalizedIdentity.videoKey &&
         opts.overwrite !== true
       ) {
         conflict = state.activeRangeDraft;
-        return state;
+        return SKIP_WRITE;
       }
 
       state.activeRangeDraft = nextDraft;
@@ -288,10 +288,11 @@
         scene,
         sceneDetails && sceneDetails.allowDuplicate === true
       );
-      if (outcome.savedScene) {
-        draftState.activeRangeDraft = null;
+      if (!outcome.savedScene) {
+        return SKIP_WRITE;
       }
 
+      draftState.activeRangeDraft = null;
       return draftState;
     });
 
@@ -311,13 +312,16 @@
     await updateState((state) => {
       const video = state.videos[videoKey];
       if (!video) {
-        return state;
+        return SKIP_WRITE;
       }
 
       const nextScenes = video.scenes.filter((scene) => scene.id !== sceneId);
       deleted = nextScenes.length !== video.scenes.length;
+      if (!deleted) {
+        return SKIP_WRITE;
+      }
 
-      if (deleted && nextScenes.length === 0) {
+      if (nextScenes.length === 0) {
         delete state.videos[videoKey];
 
         if (state.activeRangeDraft && state.activeRangeDraft.videoKey === videoKey) {
@@ -344,7 +348,7 @@
     await updateState((state) => {
       const video = state.videos[videoKey];
       if (!video) {
-        return state;
+        return SKIP_WRITE;
       }
 
       updatedVideo = {
@@ -365,8 +369,8 @@
     let updatedScene = null;
     await updateState((state) => {
       const video = state.videos[videoKey];
-      if (!video) {
-        return state;
+      if (!video || !video.scenes.some((scene) => scene.id === sceneId)) {
+        return SKIP_WRITE;
       }
 
       video.scenes = sortScenes(video.scenes.map((scene) => {
@@ -427,11 +431,12 @@
 
     let pendingJump = null;
     await updateState((draftState) => {
-      if (draftState.pendingJump && draftState.pendingJump.videoKey === videoKey) {
-        pendingJump = draftState.pendingJump;
-        draftState.pendingJump = null;
+      if (!draftState.pendingJump || draftState.pendingJump.videoKey !== videoKey) {
+        return SKIP_WRITE;
       }
 
+      pendingJump = draftState.pendingJump;
+      draftState.pendingJump = null;
       return draftState;
     });
 
@@ -440,6 +445,10 @@
 
   async function clearPendingJump() {
     await updateState((state) => {
+      if (!state.pendingJump) {
+        return SKIP_WRITE;
+      }
+
       state.pendingJump = null;
       return state;
     });
@@ -448,8 +457,9 @@
   }
 
   async function updateSettings(updates) {
-    const state = await updateState((draftState) => {
-      draftState.settings = normalizeSettings({
+    let nextSettings = null;
+    await updateState((draftState) => {
+      nextSettings = normalizeSettings({
         ...draftState.settings,
         ...updates,
         hotkeys: {
@@ -457,10 +467,16 @@
           ...(updates && updates.hotkeys ? updates.hotkeys : {})
         }
       });
+      // Both sides are normalized, so key order matches.
+      if (JSON.stringify(nextSettings) === JSON.stringify(draftState.settings)) {
+        return SKIP_WRITE;
+      }
+
+      draftState.settings = nextSettings;
       return draftState;
     });
 
-    return state.settings;
+    return nextSettings;
   }
 
   // The new value must come from the draft inside the locked updateState:
@@ -532,20 +548,24 @@
   async function deleteVideo(videoKey) {
     let deleted = false;
     await updateState((state) => {
+      let changed = false;
       if (state.videos[videoKey]) {
         delete state.videos[videoKey];
         deleted = true;
+        changed = true;
       }
 
       if (state.activeRangeDraft && state.activeRangeDraft.videoKey === videoKey) {
         state.activeRangeDraft = null;
+        changed = true;
       }
 
       if (state.pendingJump && state.pendingJump.videoKey === videoKey) {
         state.pendingJump = null;
+        changed = true;
       }
 
-      return state;
+      return changed ? state : SKIP_WRITE;
     });
 
     return { ok: deleted };
