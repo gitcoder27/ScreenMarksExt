@@ -1,18 +1,47 @@
 (function attachStorage(root) {
   const SceneMarks = root.SceneMarks || {};
-  const { MAX_NOTE_LENGTH, MAX_RAW_URLS, MESSAGE_TYPES, STORAGE_KEY } = SceneMarks.Constants;
+  const {
+    MAX_NOTE_LENGTH,
+    MAX_RAW_URLS,
+    MESSAGE_TYPES,
+    SCHEMA_VERSION,
+    STORAGE_KEYS,
+    VIDEO_KEY_PREFIX
+  } = SceneMarks.Constants;
   const { isValidSeconds, normalizeSeconds } = SceneMarks.Time;
   const {
     createDefaultState,
+    normalizeDraft,
     normalizeIdentity,
     normalizePendingJump,
     normalizeScene,
     normalizeSettings,
     normalizeState,
     normalizeTags,
+    normalizeVideo,
     sanitizeText,
     sortScenes
   } = SceneMarks.Schema;
+
+  // Storage layout (schema 2): every video under its own `video:<videoKey>`
+  // key, plus one small key each for settings, the range draft and the
+  // pending jump. A write sets only the keys whose value changed, so a
+  // storage.onChanged event (which every open tab receives) carries one
+  // video instead of the whole library. These small keys are read with
+  // every state read.
+  const SHARED_KEYS = Object.freeze([
+    STORAGE_KEYS.SETTINGS,
+    STORAGE_KEYS.ACTIVE_RANGE_DRAFT,
+    STORAGE_KEYS.PENDING_JUMP
+  ]);
+
+  function videoStorageKey(videoKey) {
+    return `${VIDEO_KEY_PREFIX}${videoKey}`;
+  }
+
+  function isVideoStorageKey(key) {
+    return typeof key === "string" && key.startsWith(VIDEO_KEY_PREFIX);
+  }
 
   function getChromeStorage() {
     if (!root.chrome || !root.chrome.storage || !root.chrome.storage.local) {
@@ -22,9 +51,9 @@
     return root.chrome.storage.local;
   }
 
-  function chromeGet(keys) {
+  function callStorage(method, ...args) {
     return new Promise((resolve, reject) => {
-      getChromeStorage().get(keys, (result) => {
+      getChromeStorage()[method](...args, (result) => {
         const error = root.chrome.runtime.lastError;
         if (error) {
           reject(new Error(error.message));
@@ -36,35 +65,128 @@
     });
   }
 
-  function chromeSet(value) {
-    return new Promise((resolve, reject) => {
-      getChromeStorage().set(value, () => {
-        const error = root.chrome.runtime.lastError;
-        if (error) {
-          reject(new Error(error.message));
-          return;
-        }
+  const chromeGet = (keys) => callStorage("get", keys);
+  const chromeSet = (values) => callStorage("set", values);
+  const chromeRemove = (keys) => callStorage("remove", keys);
 
-        resolve();
-      });
+  // Builds the state shape every caller uses ({ settings, activeRangeDraft,
+  // pendingJump, videos }) from raw entries. Only the videos present in raw
+  // are included, so a scoped read yields a state holding just those.
+  function assembleState(raw) {
+    const state = createDefaultState();
+    state.settings = normalizeSettings(raw[STORAGE_KEYS.SETTINGS]);
+    state.activeRangeDraft = normalizeDraft(raw[STORAGE_KEYS.ACTIVE_RANGE_DRAFT]);
+    state.pendingJump = normalizePendingJump(raw[STORAGE_KEYS.PENDING_JUMP]);
+
+    Object.keys(raw).forEach((key) => {
+      if (!isVideoStorageKey(key)) {
+        return;
+      }
+
+      const video = normalizeVideo(raw[key]);
+      if (video) {
+        state.videos[video.videoKey] = video;
+      }
     });
+
+    return state;
   }
 
-  async function getState() {
-    const result = await chromeGet(STORAGE_KEY);
-    return normalizeState(result[STORAGE_KEY]);
+  // null reads every video; an array reads only those videos.
+  function readState(videoKeys) {
+    const keys = videoKeys
+      ? [...SHARED_KEYS, ...videoKeys.filter((key) => typeof key === "string" && key).map(videoStorageKey)]
+      : null;
+    return chromeGet(keys).then(assembleState);
   }
 
-  async function setState(state) {
-    const normalized = normalizeState(state);
-    await chromeSet({ [STORAGE_KEY]: normalized });
-    return normalized;
+  function scopeOf(options) {
+    return options && Array.isArray(options.videoKeys) ? options.videoKeys : null;
   }
 
-  // Every mutation is a get → mutate → set cycle over the whole state blob,
-  // and these cycles arrive concurrently from multiple callers. The FIFO
-  // queue is what keeps one cycle from reading the pre-write state of
-  // another and dropping its change on the floor.
+  // Reads the whole library unless options.videoKeys names the videos to
+  // include. Settings, the range draft and the pending jump always come
+  // along, so getState({ videoKeys: [] }) is a cheap read of just those.
+  async function getState(options) {
+    return readState(scopeOf(options));
+  }
+
+  async function getSettings() {
+    const state = await readState([]);
+    return state.settings;
+  }
+
+  // The normalized storage entries a state maps to. Settings, the draft and
+  // the pending jump always have an entry (an empty draft or jump is null),
+  // so clearing one is a set in the same write as the rest of the change.
+  function toEntries(state) {
+    const entries = new Map([
+      [STORAGE_KEYS.SETTINGS, normalizeSettings(state.settings)],
+      [STORAGE_KEYS.ACTIVE_RANGE_DRAFT, normalizeDraft(state.activeRangeDraft)],
+      [STORAGE_KEYS.PENDING_JUMP, normalizePendingJump(state.pendingJump)]
+    ]);
+
+    Object.values(state.videos || {}).forEach((value) => {
+      const video = normalizeVideo(value);
+      if (video) {
+        entries.set(videoStorageKey(video.videoKey), video);
+      }
+    });
+
+    return entries;
+  }
+
+  function serializeEntries(entries) {
+    const serialized = new Map();
+    entries.forEach((value, key) => serialized.set(key, JSON.stringify(value)));
+    return serialized;
+  }
+
+  function entriesToState(entries) {
+    const state = createDefaultState();
+    state.settings = entries.get(STORAGE_KEYS.SETTINGS);
+    state.activeRangeDraft = entries.get(STORAGE_KEYS.ACTIVE_RANGE_DRAFT);
+    state.pendingJump = entries.get(STORAGE_KEYS.PENDING_JUMP);
+    entries.forEach((value, key) => {
+      if (isVideoStorageKey(key)) {
+        state.videos[value.videoKey] = value;
+      }
+    });
+
+    return state;
+  }
+
+  // Writes only the entries that differ from what was read, then removes
+  // the videos the mutator deleted. Setting before removing means a
+  // re-keyed video is never missing from storage, only briefly doubled.
+  async function commitState(nextState, before) {
+    const after = toEntries(nextState);
+    const writes = {};
+    let hasWrites = false;
+
+    after.forEach((value, key) => {
+      if (before.get(key) !== JSON.stringify(value)) {
+        writes[key] = value;
+        hasWrites = true;
+      }
+    });
+    const removals = Array.from(before.keys()).filter((key) => !after.has(key));
+
+    if (hasWrites) {
+      await chromeSet(writes);
+    }
+
+    if (removals.length) {
+      await chromeRemove(removals);
+    }
+
+    return entriesToState(after);
+  }
+
+  // Every mutation is a read → mutate → write cycle, and these cycles
+  // arrive concurrently from multiple callers. The FIFO queue is what keeps
+  // one cycle from reading the pre-write state of another and dropping its
+  // change on the floor.
   let writeQueue = Promise.resolve();
 
   function enqueueWrite(task) {
@@ -79,16 +201,64 @@
   // updateState still resolves, with the current state.
   const SKIP_WRITE = Symbol("SceneMarks.SKIP_WRITE");
 
-  async function updateState(mutator) {
+  // options.videoKeys scopes the draft state to those videos (plus
+  // settings, draft and pending jump), so a one-video change reads and
+  // writes one video. Without it the draft holds the whole library. A
+  // mutator may add or delete videos in its scope; it must not touch
+  // videos outside it, which it cannot see.
+  async function updateState(mutator, options) {
+    const videoKeys = scopeOf(options);
     return enqueueWrite(async () => {
-      const state = await getState();
+      const state = await readState(videoKeys);
+      const before = serializeEntries(toEntries(state));
       const nextState = await mutator(state);
       if (nextState === SKIP_WRITE) {
         return state;
       }
 
-      return setState(nextState || state);
+      return commitState(nextState || state, before);
     });
+  }
+
+  const SHARED_ONLY = Object.freeze({ videoKeys: [] });
+
+  function videoScope(videoKey) {
+    return { videoKeys: [videoKey] };
+  }
+
+  // For migrations, which work on raw keys (the schema-1 blob is not part
+  // of the state model). planner(get) reads what it needs and returns
+  // { set, remove } — values it has already normalized — or SKIP_WRITE.
+  // It runs in the same write queue as every other write and resolves to
+  // whether anything was written. Not exposed over RPC.
+  function updateRawKeys(planner) {
+    return enqueueWrite(async () => {
+      const plan = await planner(chromeGet);
+      if (!plan || plan === SKIP_WRITE) {
+        return false;
+      }
+
+      const writes = plan.set || {};
+      const removals = plan.remove || [];
+      if (Object.keys(writes).length) {
+        await chromeSet(writes);
+      }
+
+      if (removals.length) {
+        await chromeRemove(removals);
+      }
+
+      return true;
+    });
+  }
+
+  // Newer Chrome lists keys without copying every value; older engines
+  // fall back to a full read.
+  async function listVideoKeys() {
+    const keys = typeof getChromeStorage().getKeys === "function"
+      ? await callStorage("getKeys")
+      : Object.keys(await chromeGet(null));
+    return keys.filter(isVideoStorageKey).map((key) => key.slice(VIDEO_KEY_PREFIX.length));
   }
 
   function upsertVideo(state, identity) {
@@ -203,7 +373,7 @@
     const state = await updateState((draftState) => {
       outcome = insertScene(draftState, normalizedIdentity, scene, opts.allowDuplicate);
       return outcome.savedScene ? draftState : SKIP_WRITE;
-    });
+    }, videoScope(normalizedIdentity.videoKey));
 
     return insertSceneResult(outcome, state, normalizedIdentity.videoKey);
   }
@@ -238,7 +408,7 @@
 
       state.activeRangeDraft = nextDraft;
       return state;
-    });
+    }, SHARED_ONLY);
 
     if (conflict) {
       return {
@@ -296,7 +466,7 @@
 
       draftState.activeRangeDraft = null;
       return draftState;
-    });
+    }, videoScope(normalizedIdentity.videoKey));
 
     if (invalidScene) {
       return { ok: false, error: "Invalid scene data." };
@@ -340,7 +510,7 @@
       video.scenes = nextScenes;
       video.updatedAt = new Date().toISOString();
       return state;
-    });
+    }, videoScope(videoKey));
 
     return { ok: deleted, error: deleted ? null : "Scene not found." };
   }
@@ -360,7 +530,7 @@
       };
       state.videos[videoKey] = updatedVideo;
       return state;
-    });
+    }, videoScope(videoKey));
 
     return updatedVideo
       ? { ok: true, video: updatedVideo }
@@ -392,7 +562,7 @@
       }));
       video.updatedAt = new Date().toISOString();
       return state;
-    });
+    }, videoScope(videoKey));
 
     return updatedScene
       ? { ok: true, scene: updatedScene }
@@ -400,7 +570,7 @@
   }
 
   async function getScenesForVideo(videoKey) {
-    const state = await getState();
+    const state = await readState([videoKey]);
     return state.videos[videoKey] ? state.videos[videoKey].scenes : [];
   }
 
@@ -417,7 +587,7 @@
     await updateState((state) => {
       state.pendingJump = pendingJump;
       return state;
-    });
+    }, SHARED_ONLY);
 
     return { ok: true, pendingJump };
   }
@@ -426,7 +596,7 @@
     // Read first: most calls have nothing to consume, and an unconditional
     // write would broadcast a pointless storage.onChanged event that loops
     // back into overlay refreshes (visible as overlay flicker).
-    const state = await getState();
+    const state = await readState([]);
     if (!state.pendingJump || state.pendingJump.videoKey !== videoKey) {
       return { ok: false };
     }
@@ -440,7 +610,7 @@
       pendingJump = draftState.pendingJump;
       draftState.pendingJump = null;
       return draftState;
-    });
+    }, SHARED_ONLY);
 
     return pendingJump ? { ok: true, pendingJump } : { ok: false };
   }
@@ -453,7 +623,7 @@
 
       state.pendingJump = null;
       return state;
-    });
+    }, SHARED_ONLY);
 
     return { ok: true };
   }
@@ -476,7 +646,7 @@
 
       draftState.settings = nextSettings;
       return draftState;
-    });
+    }, SHARED_ONLY);
 
     return nextSettings;
   }
@@ -492,7 +662,7 @@
         hotkeys: { ...draftState.settings.hotkeys }
       });
       return draftState;
-    });
+    }, SHARED_ONLY);
 
     return { ok: true, settings: state.settings };
   }
@@ -527,14 +697,26 @@
     };
   }
 
+  // Returns a count, not the state: the result travels back over RPC, and
+  // the library page re-renders from storage.onChanged anyway.
   async function importState(importedValue, options) {
     const opts = options || {};
     const importedState = normalizeState(importedValue);
+    const importedVideos = Object.values(importedState.videos);
+    const replace = opts.merge === false;
 
-    return enqueueWrite(async () => {
-      const state = opts.merge === false ? createDefaultState() : await getState();
+    // A merge reads and writes only the imported videos. A replace has to
+    // see every stored video to remove the ones the import lacks.
+    await updateState((state) => {
+      if (replace) {
+        const fresh = createDefaultState();
+        state.videos = fresh.videos;
+        state.settings = fresh.settings;
+        state.activeRangeDraft = null;
+        state.pendingJump = null;
+      }
 
-      for (const video of Object.values(importedState.videos)) {
+      for (const video of importedVideos) {
         state.videos[video.videoKey] = mergeVideo(state.videos[video.videoKey], video);
       }
 
@@ -542,9 +724,10 @@
         state.settings = importedState.settings;
       }
 
-      await setState(state);
-      return getState();
-    });
+      return state;
+    }, replace ? undefined : { videoKeys: importedVideos.map((video) => video.videoKey) });
+
+    return { ok: true, videoCount: importedVideos.length };
   }
 
   async function deleteVideo(videoKey) {
@@ -568,13 +751,18 @@
       }
 
       return changed ? state : SKIP_WRITE;
-    });
+    }, videoScope(videoKey));
 
     return { ok: deleted };
   }
 
+  // Every key in this extension's storage.local is SceneMarks data.
   async function clearAllData() {
-    return enqueueWrite(() => setState(createDefaultState()));
+    return enqueueWrite(async () => {
+      await callStorage("clear");
+      await chromeSet({ [STORAGE_KEYS.SCHEMA_VERSION]: SCHEMA_VERSION });
+      return createDefaultState();
+    });
   }
 
   // The service worker's STORAGE_RPC handler whitelist must match this list
@@ -622,11 +810,12 @@
   // UI and content contexts mutate storage through this client so their
   // writes execute — serialized by the worker's write queue — in the service
   // worker. Reads stay local: they cannot lose updates. Deliberately no
-  // setState, updateState, or upsertVideo here.
+  // updateState, updateRawKeys, or upsertVideo here.
   function createClient() {
     const client = {
       getState,
-      getScenesForVideo
+      getScenesForVideo,
+      getSettings
     };
 
     RPC_METHODS.forEach((method) => {
@@ -646,18 +835,22 @@
     deleteVideo,
     endRange,
     getScenesForVideo,
+    getSettings,
     getState,
     importState,
+    isVideoStorageKey,
+    listVideoKeys,
     saveScene,
-    setState,
     setPendingJump,
     startRange,
     toggleFloatingButton,
     updateScene,
     updateVideo,
+    updateRawKeys,
     updateSettings,
     updateState,
-    upsertVideo
+    upsertVideo,
+    videoStorageKey
   };
 
   root.SceneMarks = SceneMarks;

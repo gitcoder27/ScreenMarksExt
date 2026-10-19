@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const { beforeEach, test } = require("node:test");
 
-const { installChromeStorageMock, loadSharedModules } = require("./helpers");
+const { installChromeStorageMock, loadSharedModules, videoEntries } = require("./helpers");
 
 const SceneMarks = loadSharedModules();
 const Storage = SceneMarks.Storage;
@@ -270,7 +270,7 @@ test("pending jumps are consumed once and only by the matching video", async () 
 test("importState merges favorites, skips known scenes, and keeps new ones", async () => {
   const saved = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 10, note: "original" });
 
-  const merged = await Storage.importState({
+  const result = await Storage.importState({
     videos: {
       [IDENTITY.videoKey]: {
         videoKey: IDENTITY.videoKey,
@@ -285,7 +285,9 @@ test("importState merges favorites, skips known scenes, and keeps new ones", asy
     }
   });
 
-  const video = merged.videos[IDENTITY.videoKey];
+  // The result travels back over RPC, so it is a count, not the library.
+  assert.deepEqual(result, { ok: true, videoCount: 1 });
+  const video = store.readState().videos[IDENTITY.videoKey];
   assert.equal(video.favorite, true);
   assert.equal(video.title, "Imported title");
   assert.deepEqual(video.scenes.map((scene) => scene.id), [saved.scene.id, "scene_brand_new"]);
@@ -394,4 +396,121 @@ test("saves keep the five newest raw URLs, newest last", async () => {
     store.readState().videos[IDENTITY.videoKey].rawUrls,
     [urlFor(2), urlFor(4), urlFor(5), urlFor(6), urlFor(3)]
   );
+});
+
+// A library of other videos that a one-video change must not read or write.
+function seedLibrary(count) {
+  const videos = {};
+  for (let index = 0; index < count; index += 1) {
+    const videoKey = `netflix:${8000000 + index}`;
+    videos[videoKey] = {
+      videoKey,
+      platform: "netflix",
+      canonicalUrl: `https://www.netflix.com/watch/${8000000 + index}`,
+      scenes: [{ id: `scene_${index}`, startSeconds: index, createdAt: "2025-01-01T00:00:00.000Z" }]
+    };
+  }
+
+  return installChromeStorageMock(videoEntries(videos));
+}
+
+const VIDEO_STORAGE_KEY = `video:${IDENTITY.videoKey}`;
+const SHARED_STORAGE_KEYS = ["activeRangeDraft", "pendingJump", "settings"];
+
+test("a scene save reads and writes only that video's key", async () => {
+  store = seedLibrary(50);
+  const before = { reads: store.reads, writes: store.writes };
+
+  const first = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 10 });
+  const second = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 99, favorite: true });
+
+  assert.equal(first.ok && second.ok, true);
+  assert.deepEqual(store.readLog.slice(before.reads), [
+    [...SHARED_STORAGE_KEYS, VIDEO_STORAGE_KEY].sort(),
+    [...SHARED_STORAGE_KEYS, VIDEO_STORAGE_KEY].sort()
+  ]);
+  assert.deepEqual(store.writeLog.slice(before.writes), [
+    { set: [VIDEO_STORAGE_KEY], remove: [] },
+    { set: [VIDEO_STORAGE_KEY], remove: [] }
+  ]);
+  assert.equal(Object.keys(store.readState().videos).length, 51);
+});
+
+test("a range writes its draft, then the video and the cleared draft together", async () => {
+  store = seedLibrary(5);
+  const writesBefore = store.writes;
+
+  await Storage.startRange(IDENTITY, 100);
+  await Storage.endRange(IDENTITY, 140);
+
+  assert.deepEqual(store.writeLog.slice(writesBefore), [
+    { set: ["activeRangeDraft"], remove: [] },
+    { set: ["activeRangeDraft", VIDEO_STORAGE_KEY], remove: [] }
+  ]);
+  assert.equal(store.raw("activeRangeDraft"), null);
+});
+
+test("settings, favorites and jumps write only the key they change", async () => {
+  store = seedLibrary(5);
+  const saved = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 10 });
+  const writesBefore = store.writes;
+
+  await Storage.updateSettings({ duplicateThresholdSeconds: 9 });
+  await Storage.toggleFloatingButton();
+  await Storage.updateScene(IDENTITY.videoKey, saved.scene.id, { favorite: true });
+  await Storage.updateVideo(IDENTITY.videoKey, { favorite: true });
+  await Storage.setPendingJump({
+    videoKey: IDENTITY.videoKey,
+    sceneId: saved.scene.id,
+    seconds: 10,
+    url: IDENTITY.canonicalUrl
+  });
+  await Storage.consumePendingJump(IDENTITY.videoKey);
+
+  assert.deepEqual(store.writeLog.slice(writesBefore), [
+    { set: ["settings"], remove: [] },
+    { set: ["settings"], remove: [] },
+    { set: [VIDEO_STORAGE_KEY], remove: [] },
+    { set: [VIDEO_STORAGE_KEY], remove: [] },
+    { set: ["pendingJump"], remove: [] },
+    { set: ["pendingJump"], remove: [] }
+  ]);
+});
+
+test("deleting a video's last scene removes only its key", async () => {
+  store = seedLibrary(5);
+  const saved = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 10 });
+  const writesBefore = store.writes;
+
+  await Storage.deleteScene(IDENTITY.videoKey, saved.scene.id);
+
+  assert.deepEqual(store.writeLog.slice(writesBefore), [{ set: [], remove: [VIDEO_STORAGE_KEY] }]);
+  assert.equal(Object.keys(store.readState().videos).length, 5);
+});
+
+test("scoped reads load only the named videos", async () => {
+  store = seedLibrary(5);
+  await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 10 });
+
+  const scoped = await Storage.getState({ videoKeys: [IDENTITY.videoKey, "youtube:notSaved"] });
+  const sharedOnly = await Storage.getState({ videoKeys: [] });
+  const everything = await Storage.getState();
+
+  assert.deepEqual(Object.keys(scoped.videos), [IDENTITY.videoKey]);
+  assert.deepEqual(sharedOnly.videos, {});
+  assert.equal(sharedOnly.settings.duplicateThresholdSeconds, 3);
+  assert.equal(Object.keys(everything.videos).length, 6);
+  assert.deepEqual(await Storage.getScenesForVideo("youtube:notSaved"), []);
+});
+
+test("clearAllData removes every key and records the schema version", async () => {
+  store = seedLibrary(5);
+  await Storage.updateSettings({ duplicateThresholdSeconds: 9 });
+
+  await Storage.clearAllData();
+
+  assert.deepEqual(store.keys(), ["schemaVersion"]);
+  const state = await Storage.getState();
+  assert.deepEqual(state.videos, {});
+  assert.equal(state.settings.duplicateThresholdSeconds, 3);
 });

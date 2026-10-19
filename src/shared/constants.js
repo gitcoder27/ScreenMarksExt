@@ -1,8 +1,19 @@
 (function attachConstants(root) {
   const SceneMarks = root.SceneMarks || {};
 
-  const STORAGE_KEY = "scenemarksState";
-  const SCHEMA_VERSION = 1;
+  // Schema 2 splits storage so a write carries one video, not the library:
+  // each saved video lives under `video:<videoKey>`, and settings and the
+  // transient state each get a small key of their own. Schema 1 kept
+  // everything in the single LEGACY_STORAGE_KEY blob.
+  const SCHEMA_VERSION = 2;
+  const LEGACY_STORAGE_KEY = "scenemarksState";
+  const VIDEO_KEY_PREFIX = "video:";
+  const STORAGE_KEYS = Object.freeze({
+    SCHEMA_VERSION: "schemaVersion",
+    SETTINGS: "settings",
+    ACTIVE_RANGE_DRAFT: "activeRangeDraft",
+    PENDING_JUMP: "pendingJump"
+  });
   const RANGE_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
   const PENDING_JUMP_TTL_MS = 15 * 60 * 1000;
   const MAX_NOTE_LENGTH = 1000;
@@ -63,6 +74,7 @@
   SceneMarks.Constants = {
     ARMED_DELETE_TIMEOUT_MS,
     DEFAULT_SETTINGS,
+    LEGACY_STORAGE_KEY,
     MAX_NOTE_LENGTH,
     MAX_RANDOM_OPEN_COUNT,
     MAX_RAW_URLS,
@@ -72,7 +84,8 @@
     PENDING_JUMP_TTL_MS,
     RANGE_DRAFT_TTL_MS,
     SCHEMA_VERSION,
-    STORAGE_KEY
+    STORAGE_KEYS,
+    VIDEO_KEY_PREFIX
   };
 
   root.SceneMarks = SceneMarks;

@@ -6,6 +6,8 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
 
+const { createStorageArea, videoEntries } = require("./helpers");
+
 const WORKER_DIR = path.join(__dirname, "..", "..", "src", "background");
 const LEGACY_KEY = "generic:https://www.youtube.com:/watch";
 const MIGRATED_KEY = "youtube:abcdEFGH123";
@@ -25,15 +27,16 @@ function legacyVideo() {
 
 // Loads the real worker script, in a fresh context per call (its top-level
 // consts cannot be declared twice), against a chrome double that counts
-// storage reads, so a test can tell what a bare worker start costs.
-function loadWorker(seedState) {
+// storage reads and logs writes, so a test can tell what a bare worker
+// start costs.
+function loadWorker(seedEntries) {
   const listeners = {};
   const event = (name) => ({
     addListener(fn) {
       (listeners[name] = listeners[name] || []).push(fn);
     }
   });
-  const store = { reads: 0, writes: 0, value: JSON.parse(JSON.stringify(seedState)) };
+  const store = createStorageArea(seedEntries);
   const openedTabs = [];
 
   const context = vm.createContext({ console, crypto, setImmediate, setTimeout, clearTimeout, URL });
@@ -58,19 +61,7 @@ function loadWorker(seedState) {
         openedTabs.push(options);
       }
     },
-    storage: {
-      local: {
-        get(_keys, callback) {
-          store.reads += 1;
-          setImmediate(() => callback({ scenemarksState: JSON.parse(JSON.stringify(store.value)) }));
-        },
-        set(values, callback) {
-          store.writes += 1;
-          store.value = JSON.parse(JSON.stringify(values.scenemarksState));
-          setImmediate(callback);
-        }
-      }
-    }
+    storage: { local: store.local }
   };
 
   const file = path.join(WORKER_DIR, "service-worker.js");
@@ -83,23 +74,31 @@ function settle() {
 }
 
 test("a worker wake does not read storage; install and browser start migrate", async () => {
-  const { listeners, store } = loadWorker({ videos: { [LEGACY_KEY]: legacyVideo() } });
+  // A schema-1 library holding a video saved before the YouTube adapter.
+  const { listeners, store } = loadWorker({
+    scenemarksState: { videos: { [LEGACY_KEY]: legacyVideo() }, settings: { duplicateThresholdSeconds: 7 } }
+  });
   await settle();
   assert.equal(store.reads, 0);
 
+  // Install/update splits the blob into per-video keys, then re-keys the
+  // generic video.
   listeners.onInstalled.forEach((listener) => listener({ reason: "update" }));
   await settle();
-  assert.equal(store.writes, 1);
-  assert.deepEqual(Object.keys(store.value.videos), [MIGRATED_KEY]);
+  assert.deepEqual(store.keys(), ["schemaVersion", "settings", `video:${MIGRATED_KEY}`]);
+  assert.equal(store.raw("schemaVersion"), 2);
+  assert.equal(store.raw("settings").duplicateThresholdSeconds, 7);
+  assert.deepEqual(store.raw(`video:${MIGRATED_KEY}`).scenes.map((scene) => scene.id), ["scene_1"]);
 
   // Nothing left to migrate: browser start reads but does not rewrite.
+  const writesBefore = store.writes;
   listeners.onStartup.forEach((listener) => listener());
   await settle();
-  assert.equal(store.writes, 1);
+  assert.equal(store.writes, writesBefore);
 });
 
 test("an import of legacy data is migrated right after it lands", async () => {
-  const { listeners, store } = loadWorker({ videos: {} });
+  const { listeners, store } = loadWorker({ schemaVersion: 2 });
   const response = await new Promise((resolve) => {
     listeners.onMessage[0](
       {
@@ -113,7 +112,7 @@ test("an import of legacy data is migrated right after it lands", async () => {
   assert.equal(response.ok, true);
 
   await settle();
-  assert.deepEqual(Object.keys(store.value.videos), [MIGRATED_KEY]);
+  assert.deepEqual(Object.keys(store.readState().videos), [MIGRATED_KEY]);
 });
 
 test("a batch Open Random opens at most the capped number of tabs", async () => {
@@ -128,7 +127,7 @@ test("a batch Open Random opens at most the capped number of tabs", async () => 
       rawUrls: []
     };
   }
-  const { listeners, openedTabs } = loadWorker({ videos });
+  const { listeners, openedTabs } = loadWorker(videoEntries(videos));
 
   const response = await new Promise((resolve) => {
     listeners.onMessage[0]({ type: "SCENEMARKS_OPEN_RANDOM_VIDEOS", payload: { count: 50 } }, {}, resolve);
