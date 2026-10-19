@@ -7,9 +7,16 @@
     return document.getElementById(id);
   }
 
-  // chrome.storage.local quota for MV3 extensions; the API offers no way to
-  // query it, so the meter is measured against this documented limit.
-  const LOCAL_STORAGE_QUOTA_BYTES = 10 * 1024 * 1024;
+  // chrome.storage.local is capped at QUOTA_BYTES (10 MB) unless the
+  // manifest requests unlimitedStorage; null means no cap.
+  function getQuotaBytes() {
+    const permissions = chrome.runtime.getManifest().permissions || [];
+    if (permissions.includes("unlimitedStorage")) {
+      return null;
+    }
+
+    return chrome.storage.local.QUOTA_BYTES || 10 * 1024 * 1024;
+  }
 
   function formatBytes(bytes) {
     if (bytes >= 1024 * 1024) {
@@ -30,11 +37,18 @@
       return;
     }
 
-    const percent = Math.min(100, Math.round((usedBytes / LOCAL_STORAGE_QUOTA_BYTES) * 100));
+    const quotaBytes = getQuotaBytes();
+    elements.storageMeterBar.hidden = quotaBytes === null;
+    if (quotaBytes === null) {
+      elements.storageMeterLabel.textContent = `${formatBytes(usedBytes)} used. SceneMarks has no storage limit.`;
+      return;
+    }
+
+    const percent = Math.min(100, Math.round((usedBytes / quotaBytes) * 100));
     elements.storageMeterFill.style.width = `${percent}%`;
     elements.storageMeterBar.setAttribute("aria-valuenow", String(percent));
     elements.storageMeterLabel.textContent =
-      `${formatBytes(usedBytes)} of about ${formatBytes(LOCAL_STORAGE_QUOTA_BYTES)} used (${percent}%)`;
+      `${formatBytes(usedBytes)} of about ${formatBytes(quotaBytes)} used (${percent}%)`;
     elements.storageMeterFill.classList.toggle("is-warning", percent >= 75);
     elements.storageMeterFill.classList.toggle("is-danger", percent >= 90);
   }
