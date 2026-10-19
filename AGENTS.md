@@ -7,7 +7,7 @@ SceneMarks is a local-first Chromium (Manifest V3) browser extension for saving 
 - `manifest.json` — MV3 manifest. Permissions: `storage`, `activeTab`, `scripting`, `tabs`, plus `<all_urls>` host permission; content scripts run on all pages at `document_start`.
 - `src/shared/` — classic-script IIFE modules that attach to the global `SceneMarks` namespace: `constants.js`, `time.js`, `ids.js`, `schema.js`, `storage.js`, `migrations.js`. Load order matters (constants → time → ids → schema → storage). `migrations.js` is loaded only by the service worker (it needs `SiteAdapters`, so the worker's `importScripts` also loads `site-adapters/` before it) — it is NOT in the content-script load lists.
 - `src/content/` — `video-detector.js`, `overlay.js` + `overlay.css`, `content-script.js`, and `site-adapters/` (generic, netflix, prime-video, hotstar, youtube, index).
-- `src/background/service-worker.js` — MV3 service worker: message routing, content-script injection fallback, tab management, and the single storage writer (STORAGE_RPC handler + startup legacy migration).
+- `src/background/service-worker.js` — MV3 service worker: message routing, content-script injection fallback, tab management, and the single storage writer (STORAGE_RPC handler + legacy migration on install/update, browser start and import — not on every worker wake).
 - `src/popup/`, `src/options/`, `src/library/` — extension pages (plain HTML/CSS/JS, no framework).
 - `test/automated/` — dependency-free Node tests for the shared layer (schema, storage, time) and the video detector's `seekTo` (fake media element). Run: `node --test test/automated/*.test.js`.
 - `test/manual-html5-video.html` — manual test page for local video playback.

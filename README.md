@@ -15,7 +15,7 @@ It stores saved scenes locally in `chrome.storage.local`. It does not download v
 - Page-level customizable hotkeys from the extension settings page.
 - Settings page with a storage usage meter for its local `chrome.storage` data.
 - Browser command shortcuts for quick save, range toggle, and library.
-- Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key when the extension's service worker starts, e.g. after install, update, or browser start.)
+- Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key when the extension is installed or updated, when the browser starts, and after an import.)
 - Library page with search, filters, favorites, edit/delete, copy share text, export, import, a Random pick button, and a batch Open Random that opens any chosen number of random videos in new tabs.
 - Favorites at both levels: star entire videos or individual timestamps from the library, the overlay, or the popup. The library's and overlay's favorites filters include any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.

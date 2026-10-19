@@ -13,11 +13,20 @@ importScripts(
   "../shared/migrations.js"
 );
 
-// Safe to re-run on every worker start: it performs no storage write when
-// nothing needs migrating.
-SceneMarks.Migrations.migrateLegacyGenericVideos().catch((error) => {
-  console.warn("SceneMarks legacy migration failed:", error);
-});
+// Legacy generic keys only appear in data saved before an adapter existed,
+// so the re-keying runs on install/update, on browser start and after an
+// import. It used to run on every worker start, but MV3 workers stop after
+// ~30 s idle, so each wake read and scanned the whole library first. It
+// stays safe to re-run: it performs no storage write when nothing needs
+// migrating.
+function runLegacyMigration() {
+  SceneMarks.Migrations.migrateLegacyGenericVideos().catch((error) => {
+    console.warn("SceneMarks legacy migration failed:", error);
+  });
+}
+
+chrome.runtime.onInstalled.addListener(runLegacyMigration);
+chrome.runtime.onStartup.addListener(runLegacyMigration);
 
 const CONTENT_SCRIPT_FILES = [
   "src/shared/constants.js",
@@ -387,6 +396,11 @@ async function handleStorageRpc(payload, sender) {
 
   const args = Array.isArray(payload.args) ? payload.args : [];
   const result = await SceneMarks.Storage[method](...args);
+  if (method === "importState") {
+    // An import can bring back keys saved before an adapter existed.
+    runLegacyMigration();
+  }
+
   return { ok: true, result };
 }
 
