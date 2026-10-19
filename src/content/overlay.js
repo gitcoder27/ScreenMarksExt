@@ -636,16 +636,20 @@
       group.append(headerRow);
 
       sceneContainer.hidden = !isExpanded;
-      video.scenes.slice(0, 10).forEach((scene) => {
-        sceneContainer.append(renderSceneRow({
-          scene,
-          video,
-          isCurrentVideo: state && state.context && state.context.videoKey === video.videoKey
-        }));
-      });
+      // Rows are built only for expanded groups: hidden rows for every
+      // collapsed video put tens of thousands of nodes into the host page.
+      if (isExpanded) {
+        video.scenes.slice(0, 10).forEach((scene) => {
+          sceneContainer.append(renderSceneRow({
+            scene,
+            video,
+            isCurrentVideo: state && state.context && state.context.videoKey === video.videoKey
+          }));
+        });
 
-      if (isExpanded && video.scenes.length > 10) {
-        sceneContainer.append(createElement("p", "scenemarks-overlay__more", `${video.scenes.length - 10} more saved scenes`));
+        if (video.scenes.length > 10) {
+          sceneContainer.append(createElement("p", "scenemarks-overlay__more", `${video.scenes.length - 10} more saved scenes`));
+        }
       }
 
       group.append(sceneContainer);
