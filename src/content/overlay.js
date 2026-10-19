@@ -944,7 +944,10 @@
       setEnabled,
       showToast,
       updatePlaybackTime,
-      getLatestState: () => latestState
+      getLatestState: () => latestState,
+      // A change to any saved video matters to the overlay only while this
+      // tab shows the whole library.
+      isShowingLibrary: () => viewMode === "library" && !host.hidden
     };
   }
 

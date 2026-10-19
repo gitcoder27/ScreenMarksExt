@@ -35,53 +35,11 @@
   const { formatRange, formatSeconds } = SceneMarks.Time;
   // Mutations must go through the service-worker RPC client (single writer)
   // so concurrent tabs cannot lose each other's read-modify-write updates;
-  // reads stay local to this context.
-  const rpcStorage = SceneMarks.Storage.createClient();
-  // A page load reads the whole library several times within a second or
-  // two (settings, first render, the refresh after a video is detected, the
-  // pending-jump check), so reads share one copy for a few seconds. Any
-  // storage change or mutation from this tab drops it, and so does the
-  // timer, so a tab never keeps the library alive.
-  const SHARED_READ_MS = 3000;
-  let sharedState = null;
-  let sharedStateTimer = null;
-
-  function dropSharedState() {
-    root.clearTimeout(sharedStateTimer);
-    sharedStateTimer = null;
-    sharedState = null;
-  }
-
-  function readState() {
-    if (!sharedState) {
-      const read = rpcStorage.getState();
-      sharedState = read;
-      sharedStateTimer = root.setTimeout(dropSharedState, SHARED_READ_MS);
-      read.catch(() => {
-        if (sharedState === read) {
-          dropSharedState();
-        }
-      });
-    }
-
-    return sharedState;
-  }
-
-  const Storage = {
-    getState: readState,
-    getScenesForVideo: async (videoKey) => {
-      const state = await readState();
-      return state.videos[videoKey] ? state.videos[videoKey].scenes : [];
-    }
-  };
-  Object.keys(rpcStorage).forEach((method) => {
-    if (!Storage[method]) {
-      Storage[method] = (...args) => {
-        dropSharedState();
-        return rpcStorage[method](...args).finally(dropSharedState);
-      };
-    }
-  });
+  // reads stay local to this context. Storage is split per video, so the
+  // reads here load the current video and a few small keys, not the
+  // library; only the overlay's Library tab reads every video.
+  const Storage = SceneMarks.Storage.createClient();
+  const { STORAGE_KEYS } = SceneMarks.Constants;
   let settings = null;
   let overlay = null;
   let overlayRefreshTimer = null;
@@ -115,7 +73,6 @@
     contextDead = true;
     root.clearTimeout(overlayRefreshTimer);
     root.clearTimeout(pendingJumpTimer);
-    dropSharedState();
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     if (stopNavigationWatcher) {
       stopNavigationWatcher();
@@ -208,8 +165,7 @@
   }
 
   async function loadSettings() {
-    const state = await Storage.getState();
-    settings = state.settings;
+    settings = await Storage.getSettings();
     return settings;
   }
 
@@ -356,10 +312,13 @@
 
   // Only the overlay's Library tab needs the full videos map, and only while
   // it is open; the popup's GET_CONTEXT message would otherwise carry the
-  // whole library each open, and every tab would keep a copy of it.
+  // whole library each open, and every tab would keep a copy of it. Every
+  // other caller reads just the current video.
   async function getContextResponse(options) {
     const snapshot = getCurrentSnapshot();
-    const state = await Storage.getState();
+    const state = options && options.includeVideos
+      ? await Storage.getState()
+      : await Storage.getState({ videoKeys: [snapshot.videoKey] });
     const savedVideo = snapshot.videoKey ? state.videos[snapshot.videoKey] || null : null;
 
     return {
@@ -458,7 +417,7 @@
       return detected;
     }
 
-    const state = await Storage.getState();
+    const state = await Storage.getState({ videoKeys: [] });
     if (state.activeRangeDraft && state.activeRangeDraft.videoKey === detected.snapshot.videoKey) {
       return endRange(payload);
     }
@@ -775,19 +734,47 @@
     root.addEventListener("keydown", hotkeyListener, true);
   }
 
+  // The overlay shows the video it last rendered (a navigation to another
+  // video refreshes it through the detector) and, while its Library tab is
+  // open, every video. Reading the key from the last render avoids a DOM
+  // scan per storage event.
+  function changeAffectsOverlay(changes) {
+    const shown = overlay.getLatestState();
+    const shownVideoKey = shown && shown.context ? shown.context.videoKey : null;
+    const showsLibrary = overlay.isShowingLibrary();
+
+    return Object.keys(changes).some((key) => {
+      if (SceneMarks.Storage.isVideoStorageKey(key)) {
+        return showsLibrary || (Boolean(shownVideoKey) && key === SceneMarks.Storage.videoStorageKey(shownVideoKey));
+      }
+
+      if (key === STORAGE_KEYS.ACTIVE_RANGE_DRAFT) {
+        const { oldValue, newValue } = changes[key];
+        return Boolean(shownVideoKey) && [oldValue, newValue].some((draft) => draft && draft.videoKey === shownVideoKey);
+      }
+
+      return key === STORAGE_KEYS.SETTINGS;
+    });
+  }
+
   function installStorageListener() {
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (isContextDead() || areaName !== "local" || !changes.scenemarksState) {
+      if (isContextDead() || areaName !== "local") {
         return;
       }
 
-      // Every write reaches every tab, so take the settings from the change
-      // itself instead of re-reading and normalizing the whole library.
-      dropSharedState();
-      const nextState = changes.scenemarksState.newValue;
-      settings = SceneMarks.Schema.normalizeSettings(nextState && nextState.settings);
-      if (overlay) {
-        overlay.setEnabled(settings.enableFloatingButton);
+      // Every write reaches every tab, but it carries only the keys it
+      // changed: usually one video this tab does not show, which needs no
+      // work here at all.
+      const settingsChange = changes[STORAGE_KEYS.SETTINGS];
+      if (settingsChange) {
+        settings = SceneMarks.Schema.normalizeSettings(settingsChange.newValue);
+        if (overlay) {
+          overlay.setEnabled(settings.enableFloatingButton);
+        }
+      }
+
+      if (overlay && changeAffectsOverlay(changes)) {
         scheduleOverlayRefresh(100);
       }
     });
@@ -861,7 +848,7 @@
     // Consume only after the seek is confirmed: a seek that lands too early
     // (and is overridden by the site's own resume seek) or fails leaves the
     // jump queued for the next attempt instead of losing it.
-    const state = await Storage.getState();
+    const state = await Storage.getState({ videoKeys: [] });
     const pendingJump = state.pendingJump;
     if (!pendingJump || pendingJump.videoKey !== snapshot.videoKey) {
       return;
