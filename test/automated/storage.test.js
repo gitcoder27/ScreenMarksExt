@@ -377,3 +377,21 @@ test("a mutator that throws rejects its own call without blocking the next write
   assert.equal(result.ok, true);
   assert.equal(store.readState().videos[IDENTITY.videoKey].scenes.length, 1);
 });
+
+test("saves keep the five newest raw URLs, newest last", async () => {
+  const urlFor = (session) => `https://www.youtube.com/watch?v=abcdEFGH123&pp=session${session}`;
+  for (let session = 0; session < 7; session += 1) {
+    await Storage.saveScene(
+      { ...IDENTITY, rawUrl: urlFor(session) },
+      { type: "timestamp", startSeconds: session * 100 }
+    );
+  }
+
+  // A save from an older URL moves it back to the newest position.
+  await Storage.saveScene({ ...IDENTITY, rawUrl: urlFor(3) }, { type: "timestamp", startSeconds: 900 });
+
+  assert.deepEqual(
+    store.readState().videos[IDENTITY.videoKey].rawUrls,
+    [urlFor(2), urlFor(4), urlFor(5), urlFor(6), urlFor(3)]
+  );
+});

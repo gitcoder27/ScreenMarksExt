@@ -3,6 +3,7 @@
   const {
     DEFAULT_SETTINGS,
     MAX_NOTE_LENGTH,
+    MAX_RAW_URLS,
     MAX_TAG_LENGTH,
     MAX_TAGS,
     PENDING_JUMP_TTL_MS,
@@ -193,7 +194,7 @@
       platform: VALID_PLATFORMS.has(value.platform) ? value.platform : "unknown",
       title: sanitizeText(value.title, 300) || null,
       canonicalUrl: sanitizeUrl(value.canonicalUrl),
-      rawUrls: Array.from(new Set(rawUrls)),
+      rawUrls: Array.from(new Set(rawUrls)).slice(-MAX_RAW_URLS),
       favorite: value.favorite === true,
       createdAt,
       updatedAt,

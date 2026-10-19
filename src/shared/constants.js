@@ -14,6 +14,10 @@
   // Batch Open Random opens each pick in its own tab, and every tab loads a
   // full streaming site at once, so one batch is capped.
   const MAX_RANDOM_OPEN_COUNT = 10;
+  // Saved page URLs per video, newest last. Player URLs carry per-session
+  // tokens (Netflix trackId/tctx, YouTube &t=/&pp=), so without a cap every
+  // save from a new session grows the state that every write rewrites.
+  const MAX_RAW_URLS = 5;
 
   const DEFAULT_SETTINGS = Object.freeze({
     enableFloatingButton: true,
@@ -61,6 +65,7 @@
     DEFAULT_SETTINGS,
     MAX_NOTE_LENGTH,
     MAX_RANDOM_OPEN_COUNT,
+    MAX_RAW_URLS,
     MAX_TAG_LENGTH,
     MAX_TAGS,
     MESSAGE_TYPES,

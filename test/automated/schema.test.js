@@ -65,6 +65,13 @@ test("normalizeVideo falls back to unknown platform, dedupes urls, and defaults 
   assert.equal(video.scenes.length, 1);
 });
 
+test("normalizeVideo keeps only the newest raw URLs", () => {
+  const rawUrls = Array.from({ length: 8 }, (_, index) => `https://a.example/watch?session=${index}`);
+  const video = Schema.normalizeVideo({ videoKey: "netflix:12345", rawUrls });
+
+  assert.deepEqual(video.rawUrls, rawUrls.slice(-5));
+});
+
 test("normalizeVideo drops URLs that are not http(s) or file", () => {
   const video = Schema.normalizeVideo({
     videoKey: "generic:x",

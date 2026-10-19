@@ -1,6 +1,6 @@
 (function attachStorage(root) {
   const SceneMarks = root.SceneMarks || {};
-  const { MAX_NOTE_LENGTH, MESSAGE_TYPES, STORAGE_KEY } = SceneMarks.Constants;
+  const { MAX_NOTE_LENGTH, MAX_RAW_URLS, MESSAGE_TYPES, STORAGE_KEY } = SceneMarks.Constants;
   const { isValidSeconds, normalizeSeconds } = SceneMarks.Time;
   const {
     createDefaultState,
@@ -102,6 +102,8 @@
     const rawUrls = new Set(existing ? existing.rawUrls : []);
 
     if (normalizedIdentity.rawUrl) {
+      // Re-adding moves a known URL to the end, so the cap keeps the newest.
+      rawUrls.delete(normalizedIdentity.rawUrl);
       rawUrls.add(normalizedIdentity.rawUrl);
     }
 
@@ -119,7 +121,7 @@
     video.platform = normalizedIdentity.platform || video.platform;
     video.title = normalizedIdentity.title || video.title;
     video.canonicalUrl = normalizedIdentity.canonicalUrl || video.canonicalUrl;
-    video.rawUrls = Array.from(rawUrls);
+    video.rawUrls = Array.from(rawUrls).slice(-MAX_RAW_URLS);
     video.updatedAt = now;
     state.videos[normalizedIdentity.videoKey] = video;
 
