@@ -308,8 +308,9 @@
     return { ok: true, snapshot };
   }
 
-  // Only the overlay's Library tab needs the full videos map; the popup's
-  // GET_CONTEXT message would otherwise carry the whole library each open.
+  // Only the overlay's Library tab needs the full videos map, and only while
+  // it is open; the popup's GET_CONTEXT message would otherwise carry the
+  // whole library each open, and every tab would keep a copy of it.
   async function getContextResponse(options) {
     const snapshot = getCurrentSnapshot();
     const state = await Storage.getState();
@@ -846,7 +847,7 @@
     document.querySelectorAll(".scenemarks-overlay, .scenemarks-toast").forEach((staleNode) => staleNode.remove());
 
     overlay = SceneMarks.Overlay.createOverlay({
-      getState: guard(() => getContextResponse({ includeVideos: true })),
+      getState: guard((options) => getContextResponse({ includeVideos: Boolean(options && options.includeVideos) })),
       quickSave: guard(() => saveTimestamp({ quick: true })),
       toggleRange: guard(() => toggleRange({ quick: true })),
       seekTo: guard((seconds) => seekTo({ seconds })),

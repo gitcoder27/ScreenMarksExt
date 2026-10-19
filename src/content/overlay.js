@@ -66,7 +66,7 @@
     const body = createElement("div", "scenemarks-overlay__body");
     const tabs = createElement("div", "scenemarks-overlay__tabs");
     const currentTab = createButton("scenemarks-overlay__tab is-active", "Current", () => setViewMode("current"));
-    const libraryTab = createButton("scenemarks-overlay__tab", "Library", () => setViewMode("library"));
+    const libraryTab = createButton("scenemarks-overlay__tab", "Library", openLibraryTab);
     const currentPanel = createElement("div", "scenemarks-overlay__panel");
     const libraryPanel = createElement("div", "scenemarks-overlay__panel");
     const status = createElement("p", "scenemarks-overlay__status");
@@ -111,8 +111,8 @@
     let armedDeleteTimer = null;
     let latestState = null;
     let viewMode = "current";
-    // Set when a render skipped the hidden Library tab; it is rebuilt when
-    // the user switches to it.
+    // Set when a render skipped the hidden Library tab, or its videos were
+    // released; it is rebuilt (and refetched) when the user switches to it.
     let libraryStale = false;
     let refreshSeq = 0;
     let lastRandomPickKey = null;
@@ -201,10 +201,34 @@
       if (viewMode === "library" && libraryStale) {
         renderLibrary(latestState);
       }
+      if (viewMode === "current") {
+        releaseLibrary();
+      }
       renderHeader(latestState);
       if (viewMode === "current") {
         applyCurrentHighlight();
       }
+    }
+
+    // Only the Library tab needs every saved video, so the videos are
+    // fetched when it opens instead of being carried by every refresh.
+    function openLibraryTab() {
+      setViewMode("library");
+      if (libraryStale) {
+        refresh();
+      }
+    }
+
+    // Drops the videos (and their rows) while the Library tab is not shown,
+    // so an open tab does not keep a copy of the whole library alive.
+    function releaseLibrary() {
+      if (latestState && latestState.videos) {
+        latestState = { ...latestState, videos: undefined };
+      }
+      if (libraryList.firstChild) {
+        clearNode(libraryList);
+      }
+      libraryStale = true;
     }
 
     function toggleCollapse() {
@@ -302,6 +326,9 @@
       if (enabled && !host.isConnected) {
         document.documentElement.append(host);
       }
+      if (!enabled) {
+        releaseLibrary();
+      }
 
       return Boolean(enabled) && !wasShown;
     }
@@ -332,7 +359,7 @@
       }
 
       const seq = ++refreshSeq;
-      const state = await actions.getState();
+      const state = await actions.getState({ includeVideos: viewMode === "library" });
       // A refresh started later may have resolved first; never let an older
       // read overwrite it.
       if (seq !== refreshSeq) {
@@ -508,11 +535,18 @@
     }
 
     function renderLibrary(state) {
-      libraryStale = false;
       favoritesButton.classList.toggle("is-active", favoritesOnly);
       favoritesButton.setAttribute("aria-pressed", String(favoritesOnly));
 
       clearNode(libraryList);
+      if (!state || !state.videos) {
+        // Released or not fetched yet; openLibraryTab's refresh brings them.
+        libraryStale = true;
+        libraryList.append(createElement("p", "scenemarks-overlay__empty", "Loading library..."));
+        return;
+      }
+
+      libraryStale = false;
 
       const videos = getFilteredVideos(state);
       if (!videos.length) {
