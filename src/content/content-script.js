@@ -36,7 +36,52 @@
   // Mutations must go through the service-worker RPC client (single writer)
   // so concurrent tabs cannot lose each other's read-modify-write updates;
   // reads stay local to this context.
-  const Storage = SceneMarks.Storage.createClient();
+  const rpcStorage = SceneMarks.Storage.createClient();
+  // A page load reads the whole library several times within a second or
+  // two (settings, first render, the refresh after a video is detected, the
+  // pending-jump check), so reads share one copy for a few seconds. Any
+  // storage change or mutation from this tab drops it, and so does the
+  // timer, so a tab never keeps the library alive.
+  const SHARED_READ_MS = 3000;
+  let sharedState = null;
+  let sharedStateTimer = null;
+
+  function dropSharedState() {
+    root.clearTimeout(sharedStateTimer);
+    sharedStateTimer = null;
+    sharedState = null;
+  }
+
+  function readState() {
+    if (!sharedState) {
+      const read = rpcStorage.getState();
+      sharedState = read;
+      sharedStateTimer = root.setTimeout(dropSharedState, SHARED_READ_MS);
+      read.catch(() => {
+        if (sharedState === read) {
+          dropSharedState();
+        }
+      });
+    }
+
+    return sharedState;
+  }
+
+  const Storage = {
+    getState: readState,
+    getScenesForVideo: async (videoKey) => {
+      const state = await readState();
+      return state.videos[videoKey] ? state.videos[videoKey].scenes : [];
+    }
+  };
+  Object.keys(rpcStorage).forEach((method) => {
+    if (!Storage[method]) {
+      Storage[method] = (...args) => {
+        dropSharedState();
+        return rpcStorage[method](...args).finally(dropSharedState);
+      };
+    }
+  });
   let settings = null;
   let overlay = null;
   let overlayRefreshTimer = null;
@@ -70,6 +115,7 @@
     contextDead = true;
     root.clearTimeout(overlayRefreshTimer);
     root.clearTimeout(pendingJumpTimer);
+    dropSharedState();
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     if (stopNavigationWatcher) {
       stopNavigationWatcher();
@@ -737,6 +783,7 @@
 
       // Every write reaches every tab, so take the settings from the change
       // itself instead of re-reading and normalizing the whole library.
+      dropSharedState();
       const nextState = changes.scenemarksState.newValue;
       settings = SceneMarks.Schema.normalizeSettings(nextState && nextState.settings);
       if (overlay) {
