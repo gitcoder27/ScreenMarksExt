@@ -650,8 +650,8 @@
     settings = result.settings;
     const enabled = Boolean(settings && settings.enableFloatingButton);
 
-    if (overlay) {
-      overlay.setEnabled(enabled);
+    if (overlay && overlay.setEnabled(enabled)) {
+      scheduleOverlayRefresh(0);
     }
 
     return { ok: true, message: enabled ? "Overlay shown" : "Overlay hidden" };
@@ -868,7 +868,9 @@
       openVideoAtScene: guard(openVideoAtScene),
       pickRandomVideo: guard((payload) => pickRandomVideoFromLibrary(payload))
     });
-    overlay.setEnabled(getSettingsSync().enableFloatingButton);
+    if (overlay.setEnabled(getSettingsSync().enableFloatingButton)) {
+      scheduleOverlayRefresh(0);
+    }
   }
 
   async function init() {

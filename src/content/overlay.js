@@ -292,17 +292,18 @@
       toastTimer = root.setTimeout(hideToast, TOAST_AUTO_HIDE_MS);
     }
 
+    // Returns true when this call showed a hidden panel, which then needs a
+    // refresh. The caller schedules it: every tab gets the setting change,
+    // and refreshing here would make background tabs read the whole library
+    // at once instead of when they are shown.
     function setEnabled(enabled) {
       const wasShown = host.isConnected && !host.hidden;
       host.hidden = !enabled;
       if (enabled && !host.isConnected) {
         document.documentElement.append(host);
       }
-      // The setting is re-applied on every storage change; only showing a
-      // hidden panel needs a refresh here; callers schedule their own.
-      if (enabled && !wasShown) {
-        refresh();
-      }
+
+      return Boolean(enabled) && !wasShown;
     }
 
     function destroy() {
