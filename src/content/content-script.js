@@ -173,6 +173,20 @@
     return settings || SceneMarks.Constants.DEFAULT_SETTINGS;
   }
 
+  // False when SceneMarks is paused everywhere or switched off for this
+  // site: hotkeys pass through to the page, the overlay hides and saving
+  // is refused. The detector keeps running so a jump queued from the
+  // library (or a popup Jump) still lands.
+  function isActiveHere() {
+    return SceneMarks.Schema.isEnabledForHost(getSettingsSync(), root.location.hostname);
+  }
+
+  function shouldShowOverlay() {
+    return Boolean(getSettingsSync().enableFloatingButton) && isActiveHere();
+  }
+
+  const INACTIVE_RESPONSE = Object.freeze({ ok: false, inactive: true, error: "SceneMarks is off on this site." });
+
   function isTextInputTarget(event) {
     // Keys typed inside an (open) shadow root are retargeted to its host;
     // the composed path still starts at the real input.
@@ -542,7 +556,22 @@
     return response && response.ok ? { ok: true } : response || { ok: false, error: "Could not open video." };
   }
 
+  // Capture messages come from the popup and the browser-level shortcuts;
+  // on an inactive site the shortcut still reaches the worker (the browser
+  // owns those keys) but must not save anything.
+  const CAPTURE_MESSAGE_TYPES = new Set([
+    MESSAGE_TYPES.QUICK_SAVE,
+    MESSAGE_TYPES.SAVE_TIMESTAMP,
+    MESSAGE_TYPES.START_RANGE,
+    MESSAGE_TYPES.END_RANGE,
+    MESSAGE_TYPES.TOGGLE_RANGE
+  ]);
+
   async function handleMessage(message) {
+    if (CAPTURE_MESSAGE_TYPES.has(message.type) && !isActiveHere()) {
+      return INACTIVE_RESPONSE;
+    }
+
     switch (message.type) {
       case MESSAGE_TYPES.PING:
         return { ok: true };
@@ -656,7 +685,7 @@
     settings = result.settings;
     const enabled = Boolean(settings && settings.enableFloatingButton);
 
-    if (overlay && overlay.setEnabled(enabled)) {
+    if (overlay && overlay.setEnabled(shouldShowOverlay())) {
       scheduleOverlayRefresh(0);
     }
 
@@ -671,7 +700,8 @@
       }
 
       const currentSettings = getSettingsSync();
-      if (!currentSettings.enablePageHotkeys || event.repeat || isTextInputTarget(event)) {
+      // Returning before preventDefault leaves the key to the page.
+      if (!currentSettings.enablePageHotkeys || !isActiveHere() || event.repeat || isTextInputTarget(event)) {
         return;
       }
 
@@ -770,7 +800,7 @@
       if (settingsChange) {
         settings = SceneMarks.Schema.normalizeSettings(settingsChange.newValue);
         if (overlay) {
-          overlay.setEnabled(settings.enableFloatingButton);
+          overlay.setEnabled(shouldShowOverlay());
         }
       }
 
@@ -903,7 +933,7 @@
       openVideoAtScene: guard(openVideoAtScene),
       pickRandomVideo: guard((payload) => pickRandomVideoFromLibrary(payload))
     });
-    if (overlay.setEnabled(getSettingsSync().enableFloatingButton)) {
+    if (overlay.setEnabled(shouldShowOverlay())) {
       scheduleOverlayRefresh(0);
     }
   }

@@ -514,3 +514,48 @@ test("clearAllData removes every key and records the schema version", async () =
   assert.deepEqual(state.videos, {});
   assert.equal(state.settings.duplicateThresholdSeconds, 3);
 });
+
+test("setSiteEnabled switches a site off once and back on, writing only settings", async () => {
+  const off = await Storage.setSiteEnabled("youtube.com", false);
+  assert.equal(off.ok, true);
+  assert.deepEqual(off.settings.disabledSites, ["youtube.com"]);
+  const writesAfterOff = store.writes;
+  assert.deepEqual(store.writeLog[writesAfterOff - 1], { set: ["settings"], remove: [] });
+
+  // Already covered (a subdomain of an entry): nothing to write.
+  const again = await Storage.setSiteEnabled("music.youtube.com", false);
+  assert.equal(again.ok, true);
+  assert.equal(store.writes, writesAfterOff);
+
+  // Turning a subdomain back on lifts the entry that covers it.
+  const on = await Storage.setSiteEnabled("m.youtube.com", true);
+  assert.deepEqual(on.settings.disabledSites, []);
+  assert.deepEqual(store.raw("settings").disabledSites, []);
+
+  const writesAfterOn = store.writes;
+  await Storage.setSiteEnabled("netflix.com", true);
+  assert.equal(store.writes, writesAfterOn);
+});
+
+test("setSiteEnabled rejects pages without a site name and a full list", async () => {
+  assert.equal((await Storage.setSiteEnabled("", false)).ok, false);
+
+  const { MAX_DISABLED_SITES } = SceneMarks.Constants;
+  const sites = Array.from({ length: MAX_DISABLED_SITES }, (_, index) => `site${index}.com`);
+  await Storage.updateSettings({ disabledSites: sites });
+  const writesBefore = store.writes;
+
+  const result = await Storage.setSiteEnabled("netflix.com", false);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /at most/);
+  assert.equal(store.writes, writesBefore);
+});
+
+test("concurrent site switches from two tabs both persist", async () => {
+  await Promise.all([
+    Storage.setSiteEnabled("youtube.com", false),
+    Storage.setSiteEnabled("netflix.com", false)
+  ]);
+
+  assert.deepEqual(store.raw("settings").disabledSites.sort(), ["netflix.com", "youtube.com"]);
+});

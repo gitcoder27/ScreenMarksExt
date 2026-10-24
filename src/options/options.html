@@ -20,6 +20,24 @@
 
       <form id="settingsForm" class="settings-grid">
         <section class="settings-section">
+          <h2>Where SceneMarks Runs</h2>
+          <label class="switch-row">
+            <input id="extensionEnabled" type="checkbox">
+            <span>Run on websites (uncheck to pause everywhere)</span>
+          </label>
+          <div>
+            <p class="field-label">Switched off on these sites and their subdomains</p>
+            <ul id="disabledSitesList" class="site-list"></ul>
+          </div>
+          <div class="site-add-row">
+            <label for="disabledSiteInput" class="visually-hidden">Site to switch off</label>
+            <input id="disabledSiteInput" type="text" spellcheck="false" placeholder="example.com">
+            <button id="addDisabledSiteButton" class="secondary-button" type="button">Switch Off</button>
+          </div>
+          <p class="hint">On a switched-off site SceneMarks leaves the page alone: no page hotkeys, overlay or saving. Jumps from the library still work. The popup's "Turn off here" button adds the site you are on. These changes apply right away. The browser keeps the Ctrl/Cmd+Shift shortcuts on every site; clear them from the browser shortcut settings below if they clash with a site.</p>
+        </section>
+
+        <section class="settings-section">
           <h2>Capture</h2>
           <label class="switch-row">
             <input id="enableFloatingButton" type="checkbox">

@@ -1,6 +1,7 @@
 (function attachStorage(root) {
   const SceneMarks = root.SceneMarks || {};
   const {
+    MAX_DISABLED_SITES,
     MAX_NOTE_LENGTH,
     MAX_RAW_URLS,
     MESSAGE_TYPES,
@@ -11,11 +12,14 @@
   const { isValidSeconds, normalizeSeconds } = SceneMarks.Time;
   const {
     createDefaultState,
+    findDisabledSite,
+    hostMatchesSite,
     normalizeDraft,
     normalizeIdentity,
     normalizePendingJump,
     normalizeScene,
     normalizeSettings,
+    normalizeSiteDomain,
     normalizeState,
     normalizeTags,
     normalizeVideo,
@@ -671,6 +675,47 @@
     return { ok: true, settings: state.settings };
   }
 
+  // Switching a site off adds `site` (the popup passes the page's main
+  // domain, so subdomains are covered) unless an entry already covers it.
+  // Switching it on removes every entry covering `site`, so turning
+  // m.youtube.com back on also lifts a youtube.com entry. Decided inside
+  // updateState for the same reason as toggleFloatingButton.
+  async function setSiteEnabled(site, enabled) {
+    const domain = normalizeSiteDomain(site);
+    if (!domain) {
+      return { ok: false, error: "This page has no site name to switch." };
+    }
+
+    let error = null;
+    const state = await updateState((draftState) => {
+      const sites = draftState.settings.disabledSites;
+      let nextSites;
+      if (enabled) {
+        nextSites = sites.filter((entry) => !hostMatchesSite(domain, entry));
+      } else if (findDisabledSite(sites, domain)) {
+        nextSites = sites;
+      } else if (sites.length >= MAX_DISABLED_SITES) {
+        error = `SceneMarks can switch off at most ${MAX_DISABLED_SITES} sites. Remove one in Settings first.`;
+        return SKIP_WRITE;
+      } else {
+        nextSites = [...sites, domain];
+      }
+
+      if (nextSites.length === sites.length) {
+        return SKIP_WRITE;
+      }
+
+      draftState.settings = normalizeSettings({
+        ...draftState.settings,
+        disabledSites: nextSites,
+        hotkeys: { ...draftState.settings.hotkeys }
+      });
+      return draftState;
+    }, SHARED_ONLY);
+
+    return error ? { ok: false, error } : { ok: true, site: domain, settings: state.settings };
+  }
+
   function mergeVideo(existing, incoming) {
     if (!existing) {
       return incoming;
@@ -786,7 +831,8 @@
     "deleteVideo",
     "importState",
     "clearAllData",
-    "toggleFloatingButton"
+    "toggleFloatingButton",
+    "setSiteEnabled"
   ]);
 
   function sendStorageRpc(method, args) {
@@ -846,6 +892,7 @@
     listVideoKeys,
     saveScene,
     setPendingJump,
+    setSiteEnabled,
     startRange,
     toggleFloatingButton,
     updateScene,

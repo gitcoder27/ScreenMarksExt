@@ -29,8 +29,17 @@
   // tokens (Netflix trackId/tctx, YouTube &t=/&pp=), so without a cap every
   // save from a new session grows the state that every write rewrites.
   const MAX_RAW_URLS = 5;
+  // Sites switched off live in settings, which every tab reads, so the
+  // list is capped.
+  const MAX_DISABLED_SITES = 200;
 
   const DEFAULT_SETTINGS = Object.freeze({
+    // false pauses SceneMarks on every site; disabledSites lists the
+    // domains (each covering its subdomains) it is switched off on. Off
+    // means no page hotkeys, browser shortcuts, overlay or saving there;
+    // jumps queued from the library still land.
+    extensionEnabled: true,
+    disabledSites: Object.freeze([]),
     enableFloatingButton: true,
     enableGenericSites: true,
     enablePageHotkeys: true,
@@ -75,6 +84,7 @@
     ARMED_DELETE_TIMEOUT_MS,
     DEFAULT_SETTINGS,
     LEGACY_STORAGE_KEY,
+    MAX_DISABLED_SITES,
     MAX_NOTE_LENGTH,
     MAX_RANDOM_OPEN_COUNT,
     MAX_RAW_URLS,

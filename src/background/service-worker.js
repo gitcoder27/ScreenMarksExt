@@ -64,7 +64,8 @@ const STORAGE_RPC_METHODS = new Set([
   "deleteVideo",
   "importState",
   "clearAllData",
-  "toggleFloatingButton"
+  "toggleFloatingButton",
+  "setSiteEnabled"
 ]);
 
 // Bulk-destructive methods that only extension pages (options, library)
@@ -369,6 +370,84 @@ async function openRandomVideos(payload) {
     videos: picked.map((video) => ({ videoKey: video.videoKey, title: video.title }))
   };
 }
+
+// The toolbar badge reads OFF on tabs where SceneMarks is paused or
+// switched off for the site. Badges are set per tab and refreshed when a
+// tab navigates or the switches change; the settings are cached for the
+// life of the worker and kept current from storage.onChanged.
+let badgeSettings = null;
+
+async function getBadgeSettings() {
+  if (!badgeSettings) {
+    badgeSettings = await SceneMarks.Storage.getSettings();
+  }
+
+  return badgeSettings;
+}
+
+// null for pages SceneMarks never runs on (chrome://, the store), which
+// keep a blank badge.
+function pageHostname(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ""));
+    return ["http:", "https:", "file:"].includes(url.protocol) ? url.hostname : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function updateBadge(tabId, url, settings) {
+  const hostname = pageHostname(url);
+  const off = hostname !== null && !SceneMarks.Schema.isEnabledForHost(settings, hostname);
+  await chrome.action.setBadgeText({ tabId, text: off ? "OFF" : "" });
+  if (off) {
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: "#64748b" });
+  }
+}
+
+async function updateAllBadges() {
+  const tabs = (await chrome.tabs.query({})).filter((tab) => tab && tab.id);
+  if (!tabs.length) {
+    return;
+  }
+
+  const settings = await getBadgeSettings();
+  await Promise.all(tabs.map((tab) => updateBadge(tab.id, tab.url, settings).catch(() => {})));
+}
+
+function refreshAllBadges() {
+  updateAllBadges().catch((error) => {
+    console.warn("SceneMarks badge update failed:", error);
+  });
+}
+
+chrome.runtime.onInstalled.addListener(refreshAllBadges);
+chrome.runtime.onStartup.addListener(refreshAllBadges);
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // "complete" also re-applies a badge the browser reset on navigation.
+  if (!changeInfo.url && changeInfo.status !== "complete") {
+    return;
+  }
+
+  getBadgeSettings()
+    .then((settings) => updateBadge(tabId, tab.url, settings))
+    .catch(() => {});
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  const change = changes[SceneMarks.Constants.STORAGE_KEYS.SETTINGS];
+  if (areaName !== "local" || !change) {
+    return;
+  }
+
+  const previous = SceneMarks.Schema.normalizeSettings(change.oldValue);
+  badgeSettings = SceneMarks.Schema.normalizeSettings(change.newValue);
+  if (previous.extensionEnabled !== badgeSettings.extensionEnabled
+    || previous.disabledSites.join(" ") !== badgeSettings.disabledSites.join(" ")) {
+    refreshAllBadges();
+  }
+});
 
 chrome.commands.onCommand.addListener((command) => {
   if (command === "open-library") {

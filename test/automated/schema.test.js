@@ -157,3 +157,51 @@ test("normalizeSettings clamps the duplicate threshold and validates jump behavi
   const behavior = Schema.normalizeSettings({ defaultJumpBehavior: "teleport" });
   assert.equal(behavior.defaultJumpBehavior, "preserve-play-state");
 });
+
+test("normalizeSiteDomain reduces pasted URLs and hosts to a bare hostname", () => {
+  assert.equal(Schema.normalizeSiteDomain("https://www.YouTube.com/watch?v=1"), "youtube.com");
+  assert.equal(Schema.normalizeSiteDomain("music.youtube.com:8080"), "music.youtube.com");
+  assert.equal(Schema.normalizeSiteDomain("*.netflix.com"), "netflix.com");
+  assert.equal(Schema.normalizeSiteDomain("localhost"), "localhost");
+  assert.equal(Schema.normalizeSiteDomain("not a site"), "");
+  assert.equal(Schema.normalizeSiteDomain(""), "");
+});
+
+test("mainDomainForHost keeps the registrable domain, country suffixes included", () => {
+  assert.equal(Schema.mainDomainForHost("www.youtube.com"), "youtube.com");
+  assert.equal(Schema.mainDomainForHost("m.youtube.com"), "youtube.com");
+  assert.equal(Schema.mainDomainForHost("www.primevideo.com"), "primevideo.com");
+  assert.equal(Schema.mainDomainForHost("www.amazon.co.uk"), "amazon.co.uk");
+  assert.equal(Schema.mainDomainForHost("www.hotstar.com.au"), "hotstar.com.au");
+  assert.equal(Schema.mainDomainForHost("192.168.1.20"), "192.168.1.20");
+  assert.equal(Schema.mainDomainForHost("localhost"), "localhost");
+});
+
+test("isEnabledForHost honors the pause switch and covers subdomains of a disabled site", () => {
+  const settings = Schema.normalizeSettings({ disabledSites: ["youtube.com"] });
+  assert.equal(Schema.isEnabledForHost(settings, "www.youtube.com"), false);
+  assert.equal(Schema.isEnabledForHost(settings, "youtube.com"), false);
+  assert.equal(Schema.isEnabledForHost(settings, "notyoutube.com"), true);
+  assert.equal(Schema.isEnabledForHost(settings, "www.netflix.com"), true);
+  assert.equal(Schema.isEnabledForHost(settings, ""), true);
+
+  const paused = Schema.normalizeSettings({ extensionEnabled: false });
+  assert.equal(Schema.isEnabledForHost(paused, "www.netflix.com"), false);
+  assert.equal(Schema.isEnabledForHost(paused, ""), false);
+});
+
+test("normalizeSettings defaults the site switches and cleans the site list", () => {
+  const defaults = Schema.normalizeSettings({});
+  assert.equal(defaults.extensionEnabled, true);
+  assert.deepEqual(defaults.disabledSites, []);
+
+  const settings = Schema.normalizeSettings({
+    extensionEnabled: "no",
+    disabledSites: ["YouTube.com", "www.youtube.com", "bad site", 7, "netflix.com"]
+  });
+  assert.equal(settings.extensionEnabled, true);
+  assert.deepEqual(settings.disabledSites, ["youtube.com", "netflix.com"]);
+
+  const many = Array.from({ length: SceneMarks.Constants.MAX_DISABLED_SITES + 5 }, (_, index) => `site${index}.com`);
+  assert.equal(Schema.normalizeSettings({ disabledSites: many }).disabledSites.length, SceneMarks.Constants.MAX_DISABLED_SITES);
+});

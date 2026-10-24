@@ -137,6 +137,63 @@ select {
   color: #e2e8f0;
 }
 
+.field-label {
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.site-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.site-list li {
+  align-items: center;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 6px 6px 6px 10px;
+}
+
+.site-list li span {
+  overflow-wrap: anywhere;
+}
+
+.site-list li.is-empty {
+  color: #94a3b8;
+  font-size: 13px;
+  padding: 10px;
+}
+
+.site-list button {
+  background: #334155;
+  color: #e2e8f0;
+  padding: 6px 10px;
+}
+
+.site-add-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(180px, 1fr) auto;
+}
+
+.visually-hidden {
+  clip: rect(0 0 0 0);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
 .danger-section {
   border-color: #7f1d1d;
 }

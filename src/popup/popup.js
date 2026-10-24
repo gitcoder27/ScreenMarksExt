@@ -1,10 +1,14 @@
 (function initializePopup() {
   const { ARMED_DELETE_TIMEOUT_MS, MESSAGE_TYPES } = SceneMarks.Constants;
   const { formatRange, formatSeconds } = SceneMarks.Time;
+  const { findDisabledSite, isEnabledForHost, mainDomainForHost } = SceneMarks.Schema;
   const Storage = SceneMarks.Storage.createClient();
   const elements = {};
   let latestContext = null;
   let latestSettings = null;
+  // The active tab's hostname, or null on pages without a site to switch
+  // off (file://, browser pages).
+  let activeHostname = null;
   let pendingDialogResolve = null;
   // Two-step delete state: which scene's delete button is armed, plus its
   // auto-disarm timer.
@@ -138,6 +142,55 @@
   async function loadLocalSettings() {
     latestSettings = await Storage.getSettings();
     renderOverlayToggle();
+    renderSiteControls();
+  }
+
+  async function loadActiveHostname() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const url = new URL(tab && tab.url ? tab.url : "");
+      activeHostname = /^https?:$/.test(url.protocol) && url.hostname ? url.hostname : null;
+    } catch (_error) {
+      activeHostname = null;
+    }
+  }
+
+  function isPausedEverywhere() {
+    return Boolean(latestSettings) && latestSettings.extensionEnabled === false;
+  }
+
+  function getDisabledSite() {
+    return latestSettings && activeHostname ? findDisabledSite(latestSettings.disabledSites, activeHostname) : null;
+  }
+
+  function isActiveHere() {
+    return !latestSettings || isEnabledForHost(latestSettings, activeHostname || "");
+  }
+
+  function renderSiteControls() {
+    const disabledSite = getDisabledSite();
+    const paused = isPausedEverywhere();
+
+    elements.siteRow.hidden = !activeHostname;
+    if (activeHostname) {
+      elements.siteStateLabel.textContent = disabledSite ? "Off on" : "On for";
+      elements.siteDomainLabel.textContent = disabledSite || mainDomainForHost(activeHostname) || activeHostname;
+      elements.siteToggleButton.textContent = disabledSite ? "Turn on here" : "Turn off here";
+      elements.siteToggleButton.classList.toggle("is-off", Boolean(disabledSite));
+      elements.siteToggleButton.title = disabledSite
+        ? "Turn SceneMarks back on for this site"
+        : "Stop SceneMarks hotkeys, overlay and saving on this site and its subdomains";
+    }
+
+    elements.pauseStateLabel.textContent = paused ? "All sites: paused" : "All sites: on";
+    elements.pauseAllButton.textContent = paused ? "Resume" : "Pause everywhere";
+    elements.pauseAllButton.classList.toggle("is-off", paused);
+    elements.pauseAllButton.setAttribute("aria-pressed", String(paused));
+  }
+
+  function inactiveMessage() {
+    const where = isPausedEverywhere() ? "paused on every site" : `off on ${getDisabledSite()}`;
+    return `SceneMarks is ${where}: its hotkeys and overlay leave this page alone. Jumps from the library still work.`;
   }
 
   function renderUnavailable(message) {
@@ -146,6 +199,7 @@
     elements.sceneCountLabel.textContent = "0";
     clearNode(elements.sceneList);
     renderOverlayToggle();
+    renderSiteControls();
 
     const empty = document.createElement("p");
     empty.className = "empty-state";
@@ -162,15 +216,20 @@
     elements.platformLabel.textContent = context.detected
       ? `${context.platform} detected`
       : "No active video detected";
-    elements.videoPanel.hidden = !context.detected;
+    // Saving is refused on an inactive site, so its buttons are hidden;
+    // the saved scenes stay listed and jumpable, like the library.
+    elements.videoPanel.hidden = !context.detected || !isActiveHere();
     elements.currentTimeLabel.textContent = context.detected ? formatSeconds(context.currentTimeSeconds) : "--:--";
     elements.durationLabel.textContent = context.durationSeconds === null
       ? "--:--"
       : formatSeconds(context.durationSeconds);
     elements.sceneCountLabel.textContent = String(scenes.length);
     renderOverlayToggle();
+    renderSiteControls();
 
-    if (!context.detected) {
+    if (!isActiveHere()) {
+      setStatus(inactiveMessage(), false);
+    } else if (!context.detected) {
       setStatus("No active video detected. Start playback, wait for the player to load, then retry.", true);
     } else {
       setStatus(title, false);
@@ -506,10 +565,54 @@
     setStatus(latestSettings.enableFloatingButton ? "Overlay panel enabled." : "Overlay panel disabled.", false);
   }
 
+  async function toggleSite() {
+    if (!activeHostname) {
+      return;
+    }
+
+    // Turning off stores the main domain so subdomains are covered; turning
+    // on passes the full hostname so every entry covering it is removed.
+    const turningOn = Boolean(getDisabledSite());
+    let result = null;
+    try {
+      result = turningOn
+        ? await Storage.setSiteEnabled(activeHostname, true)
+        : await Storage.setSiteEnabled(mainDomainForHost(activeHostname), false);
+    } catch (error) {
+      setStatus(storageErrorMessage(error), true);
+      return;
+    }
+
+    if (!result.ok) {
+      setStatus(result.error || "Could not switch this site.", true);
+      return;
+    }
+
+    latestSettings = result.settings;
+    await refreshContext();
+  }
+
+  async function togglePauseEverywhere() {
+    try {
+      latestSettings = await Storage.updateSettings({ extensionEnabled: isPausedEverywhere() });
+    } catch (error) {
+      setStatus(storageErrorMessage(error), true);
+      return;
+    }
+
+    await refreshContext();
+  }
+
   function bindElements() {
     [
       "platformLabel",
       "refreshButton",
+      "siteRow",
+      "siteStateLabel",
+      "siteDomainLabel",
+      "siteToggleButton",
+      "pauseStateLabel",
+      "pauseAllButton",
       "statusBox",
       "videoPanel",
       "toggleOverlayButton",
@@ -537,6 +640,8 @@
 
   function bindEvents() {
     elements.refreshButton.addEventListener("click", refreshContext);
+    elements.siteToggleButton.addEventListener("click", toggleSite);
+    elements.pauseAllButton.addEventListener("click", togglePauseEverywhere);
     elements.saveMomentButton.addEventListener("click", saveMoment);
     elements.rangeButton.addEventListener("click", handleRangeButton);
     elements.toggleOverlayButton.addEventListener("click", toggleOverlay);
@@ -574,9 +679,10 @@
     }, true);
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
+  document.addEventListener("DOMContentLoaded", async () => {
     bindElements();
     bindEvents();
+    await loadActiveHostname();
     refreshContext();
   });
 })();

@@ -29,7 +29,7 @@ function legacyVideo() {
 // consts cannot be declared twice), against a chrome double that counts
 // storage reads and logs writes, so a test can tell what a bare worker
 // start costs.
-function loadWorker(seedEntries) {
+function loadWorker(seedEntries, options) {
   const listeners = {};
   const event = (name) => ({
     addListener(fn) {
@@ -38,6 +38,9 @@ function loadWorker(seedEntries) {
   });
   const store = createStorageArea(seedEntries);
   const openedTabs = [];
+  const openTabs = (options && options.tabs) || [];
+  // The latest badge text set per tab id.
+  const badges = {};
 
   const context = vm.createContext({ console, crypto, setImmediate, setTimeout, clearTimeout, URL });
   context.importScripts = (...files) => {
@@ -55,18 +58,25 @@ function loadWorker(seedEntries) {
       onMessage: event("onMessage")
     },
     commands: { onCommand: event("onCommand") },
+    action: {
+      setBadgeText: async ({ tabId, text }) => {
+        badges[tabId] = text;
+      },
+      setBadgeBackgroundColor: async () => {}
+    },
     tabs: {
-      query: async () => [],
+      query: async () => openTabs,
       create: async (options) => {
         openedTabs.push(options);
-      }
+      },
+      onUpdated: event("tabs.onUpdated")
     },
-    storage: { local: store.local }
+    storage: { local: store.local, onChanged: event("storage.onChanged") }
   };
 
   const file = path.join(WORKER_DIR, "service-worker.js");
   vm.runInContext(fs.readFileSync(file, "utf8"), context, { filename: file });
-  return { listeners, openedTabs, store };
+  return { badges, context, listeners, openedTabs, store };
 }
 
 function settle() {
@@ -137,4 +147,53 @@ test("a batch Open Random opens at most the capped number of tabs", async () => 
   assert.equal(response.openedCount, 10);
   assert.equal(response.requestedCount, 10);
   assert.equal(openedTabs.length, 10);
+});
+
+test("the worker's RPC whitelist matches the storage client's mutation methods", () => {
+  const { context } = loadWorker({});
+  const whitelist = vm.runInContext("Array.from(STORAGE_RPC_METHODS).sort()", context);
+  const clientMethods = vm.runInContext(
+    "Object.keys(SceneMarks.Storage.createClient()).filter((name) => !['getState', 'getScenesForVideo', 'getSettings'].includes(name)).sort()",
+    context
+  );
+
+  assert.deepEqual(whitelist, clientMethods);
+  ["updateState", "updateRawKeys", "upsertVideo"].forEach((name) => assert.equal(whitelist.includes(name), false));
+});
+
+test("badges read OFF on switched-off and paused sites only", async () => {
+  const tabs = [
+    { id: 1, url: "https://www.youtube.com/watch?v=abc" },
+    { id: 2, url: "https://music.youtube.com/" },
+    { id: 3, url: "https://www.netflix.com/watch/1" },
+    { id: 4, url: "chrome://extensions/" }
+  ];
+  const { badges, listeners } = loadWorker(
+    { schemaVersion: 2, settings: { disabledSites: ["youtube.com"] } },
+    { tabs }
+  );
+
+  listeners.onInstalled.forEach((listener) => listener({ reason: "update" }));
+  await settle();
+  assert.deepEqual(badges, { 1: "OFF", 2: "OFF", 3: "", 4: "" });
+
+  // Pausing everywhere turns every web page's badge off.
+  listeners["storage.onChanged"].forEach((listener) => listener({
+    settings: {
+      oldValue: { disabledSites: ["youtube.com"] },
+      newValue: { disabledSites: ["youtube.com"], extensionEnabled: false }
+    }
+  }, "local"));
+  await settle();
+  assert.deepEqual(badges, { 1: "OFF", 2: "OFF", 3: "OFF", 4: "" });
+
+  // A tab navigating re-applies its badge from the cached settings.
+  listeners["storage.onChanged"].forEach((listener) => listener({
+    settings: { oldValue: { extensionEnabled: false }, newValue: { disabledSites: ["netflix.com"] } }
+  }, "local"));
+  await settle();
+  listeners["tabs.onUpdated"].forEach((listener) => listener(1, { url: "https://www.netflix.com/" }, { id: 1, url: "https://www.netflix.com/" }));
+  await settle();
+  assert.equal(badges[1], "OFF");
+  assert.equal(badges[2], "");
 });

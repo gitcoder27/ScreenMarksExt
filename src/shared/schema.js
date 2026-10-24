@@ -2,6 +2,7 @@
   const SceneMarks = root.SceneMarks || {};
   const {
     DEFAULT_SETTINGS,
+    MAX_DISABLED_SITES,
     MAX_NOTE_LENGTH,
     MAX_RAW_URLS,
     MAX_TAG_LENGTH,
@@ -100,6 +101,91 @@
     };
   }
 
+  // A site entry is a bare lowercase hostname. Pasted URLs, ports and a
+  // leading "www." or "*." are dropped, so "https://www.YouTube.com/watch"
+  // becomes "youtube.com"; anything that is not a hostname yields "".
+  function normalizeSiteDomain(value) {
+    const text = sanitizeText(value, 300).toLowerCase();
+    if (!text) {
+      return "";
+    }
+
+    let hostname;
+    try {
+      hostname = new URL(text.includes("://") ? text : `https://${text.replace(/^\*\./, "")}`).hostname;
+    } catch (_error) {
+      return "";
+    }
+
+    hostname = hostname.replace(/\.$/, "").replace(/^www\./, "");
+    // The URL parser reads numbers as IPv4 ("7" becomes "0.0.0.7"), so an
+    // address only counts when it was typed out.
+    if (/^\d+(\.\d+){3}$/.test(hostname) && !text.includes(hostname)) {
+      return "";
+    }
+
+    return hostname.length <= 253 && /^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(hostname) ? hostname : "";
+  }
+
+  // Second-level labels under a two-letter country TLD that act as public
+  // suffixes (amazon.co.uk, hotstar.com.au). Without the full Public Suffix
+  // List this keeps the common cases right; an entry can still be edited by
+  // hand on the options page.
+  const COUNTRY_SECOND_LEVEL_LABELS = new Set(["ac", "co", "com", "edu", "gov", "ne", "net", "or", "org"]);
+
+  // The main domain the popup switches off for a page, so one entry covers
+  // every subdomain: www.youtube.com and m.youtube.com both give
+  // youtube.com.
+  function mainDomainForHost(hostname) {
+    const host = normalizeSiteDomain(hostname);
+    if (!host || /^\d+(\.\d+){3}$/.test(host)) {
+      return host;
+    }
+
+    const labels = host.split(".");
+    const tld = labels[labels.length - 1];
+    const secondLevel = labels[labels.length - 2];
+    const keep = labels.length > 2 && tld.length === 2 && COUNTRY_SECOND_LEVEL_LABELS.has(secondLevel) ? 3 : 2;
+    return labels.slice(-keep).join(".");
+  }
+
+  function hostMatchesSite(hostname, site) {
+    const host = String(hostname || "").toLowerCase().replace(/\.$/, "");
+    return Boolean(host && site) && (host === site || host.endsWith(`.${site}`));
+  }
+
+  function findDisabledSite(disabledSites, hostname) {
+    return (Array.isArray(disabledSites) ? disabledSites : []).find((site) => hostMatchesSite(hostname, site)) || null;
+  }
+
+  // Whether SceneMarks should act on a page with this hostname. Pages
+  // without one (file://) can only be paused everywhere.
+  function isEnabledForHost(settings, hostname) {
+    return Boolean(settings)
+      && settings.extensionEnabled !== false
+      && !findDisabledSite(settings.disabledSites, hostname);
+  }
+
+  function normalizeDisabledSites(value) {
+    const sites = [];
+    const seen = new Set();
+
+    for (const entry of Array.isArray(value) ? value : []) {
+      const site = normalizeSiteDomain(entry);
+      if (!site || seen.has(site)) {
+        continue;
+      }
+
+      sites.push(site);
+      seen.add(site);
+      if (sites.length >= MAX_DISABLED_SITES) {
+        break;
+      }
+    }
+
+    return sites;
+  }
+
   function normalizeSettings(value) {
     const source = value && typeof value === "object" ? value : {};
     const duplicateThresholdSeconds = Number(source.duplicateThresholdSeconds);
@@ -108,6 +194,8 @@
       : DEFAULT_SETTINGS.defaultJumpBehavior;
 
     return {
+      extensionEnabled: source.extensionEnabled !== false,
+      disabledSites: normalizeDisabledSites(source.disabledSites),
       enableFloatingButton: source.enableFloatingButton !== false,
       enableGenericSites: source.enableGenericSites !== false,
       enablePageHotkeys: source.enablePageHotkeys !== false,
@@ -276,11 +364,16 @@
 
   SceneMarks.Schema = {
     createDefaultState,
+    findDisabledSite,
+    hostMatchesSite,
+    isEnabledForHost,
+    mainDomainForHost,
     normalizeDraft,
     normalizeIdentity,
     normalizePendingJump,
     normalizeScene,
     normalizeSettings,
+    normalizeSiteDomain,
     normalizeState,
     normalizeTags,
     normalizeVideo,

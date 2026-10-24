@@ -18,6 +18,17 @@
         <button id="refreshButton" class="icon-button" type="button" title="Retry detection" aria-label="Retry detection">R</button>
       </header>
 
+      <section class="site-controls" aria-label="Where SceneMarks runs">
+        <div id="siteRow" class="site-controls__row" hidden>
+          <p><span id="siteStateLabel">On for</span> <strong id="siteDomainLabel"></strong></p>
+          <button id="siteToggleButton" type="button">Turn off here</button>
+        </div>
+        <div class="site-controls__row">
+          <p id="pauseStateLabel">Active on all other sites</p>
+          <button id="pauseAllButton" type="button">Pause everywhere</button>
+        </div>
+      </section>
+
       <section id="statusBox" class="status-box" role="status"></section>
 
       <section id="videoPanel" class="video-panel" hidden>

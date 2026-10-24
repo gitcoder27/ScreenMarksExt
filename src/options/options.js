@@ -57,6 +57,10 @@
     [
       "openLibraryButton",
       "settingsForm",
+      "extensionEnabled",
+      "disabledSitesList",
+      "disabledSiteInput",
+      "addDisabledSiteButton",
       "enableFloatingButton",
       "quickSaveRequiresNote",
       "duplicateThresholdSeconds",
@@ -180,9 +184,83 @@
     return parts.join("+");
   }
 
+  // The site switches apply as soon as they change instead of waiting for
+  // Save Settings, matching the popup, which can change them while this
+  // page is open (the storage listener below keeps this section current).
+  function renderSiteSwitches(settings) {
+    elements.extensionEnabled.checked = settings.extensionEnabled;
+
+    while (elements.disabledSitesList.firstChild) {
+      elements.disabledSitesList.firstChild.remove();
+    }
+
+    if (!settings.disabledSites.length) {
+      const empty = document.createElement("li");
+      empty.className = "is-empty";
+      empty.textContent = "None. SceneMarks runs on every site.";
+      elements.disabledSitesList.append(empty);
+      return;
+    }
+
+    settings.disabledSites.forEach((site) => {
+      const item = document.createElement("li");
+      const name = document.createElement("span");
+      name.textContent = site;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "Turn On";
+      remove.setAttribute("aria-label", `Turn SceneMarks back on for ${site}`);
+      remove.addEventListener("click", () => setSiteEnabled(site, true));
+      item.append(name, remove);
+      elements.disabledSitesList.append(item);
+    });
+  }
+
+  async function setSiteEnabled(site, enabled) {
+    let result = null;
+    try {
+      result = await Storage.setSiteEnabled(site, enabled);
+    } catch (error) {
+      setStatus(storageStatusMessage(error), true);
+      return false;
+    }
+
+    if (!result.ok) {
+      setStatus(result.error, true);
+      return false;
+    }
+
+    renderSiteSwitches(result.settings);
+    setStatus(enabled ? `SceneMarks is back on for ${result.site}.` : `SceneMarks is off on ${result.site}.`, false);
+    return true;
+  }
+
+  async function addDisabledSite() {
+    const site = SceneMarks.Schema.normalizeSiteDomain(elements.disabledSiteInput.value);
+    if (!site) {
+      setStatus("Enter a site such as example.com.", true);
+      return;
+    }
+
+    if (await setSiteEnabled(site, false)) {
+      elements.disabledSiteInput.value = "";
+    }
+  }
+
+  async function savePauseSwitch() {
+    try {
+      const settings = await Storage.updateSettings({ extensionEnabled: elements.extensionEnabled.checked });
+      renderSiteSwitches(settings);
+      setStatus(settings.extensionEnabled ? "SceneMarks is running again." : "SceneMarks is paused on every site.", false);
+    } catch (error) {
+      setStatus(storageStatusMessage(error), true);
+    }
+  }
+
   async function loadSettings() {
     const settings = await Storage.getSettings();
 
+    renderSiteSwitches(settings);
     elements.enableFloatingButton.checked = settings.enableFloatingButton;
     elements.quickSaveRequiresNote.checked = settings.quickSaveRequiresNote;
     elements.duplicateThresholdSeconds.value = String(settings.duplicateThresholdSeconds);
@@ -296,6 +374,21 @@
 
   function bindEvents() {
     elements.settingsForm.addEventListener("submit", saveSettings);
+    elements.extensionEnabled.addEventListener("change", savePauseSwitch);
+    elements.addDisabledSiteButton.addEventListener("click", addDisabledSite);
+    // Enter in the site field adds the site instead of submitting the form.
+    elements.disabledSiteInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        addDisabledSite();
+      }
+    });
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      const change = changes[SceneMarks.Constants.STORAGE_KEYS.SETTINGS];
+      if (areaName === "local" && change) {
+        renderSiteSwitches(SceneMarks.Schema.normalizeSettings(change.newValue));
+      }
+    });
     elements.openLibraryButton.addEventListener("click", () => {
       chrome.tabs.create({ url: chrome.runtime.getURL("src/library/library.html") });
     });

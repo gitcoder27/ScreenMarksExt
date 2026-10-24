@@ -99,6 +99,19 @@ Page hotkeys are registered at `document_start`, before the site's own scripts r
 
 To customize browser command shortcuts, open `brave://extensions/shortcuts` or `chrome://extensions/shortcuts`.
 
+## Switching SceneMarks Off For A Site
+
+The popup's top panel has two switches:
+
+- **Turn off here** switches SceneMarks off for the current site's main domain and all its subdomains. On `www.youtube.com` it stores `youtube.com`, which also covers `m.youtube.com` and `music.youtube.com`. **Turn on here** removes every entry covering the page.
+- **Pause everywhere** switches SceneMarks off on every site until you press **Resume**.
+
+On a switched-off site, page hotkeys go to the site untouched, the overlay is hidden, and saving or marking ranges is refused. Saved scenes still show in the popup, and jumps from the library still land. The toolbar icon shows an **OFF** badge on those tabs. The changes reach open tabs right away, with no reload needed.
+
+Settings → **Where SceneMarks Runs** lists the switched-off sites. You can turn a site back on there, or add one by hand (`example.com`, a subdomain, or a pasted URL). An entry covers the domain it names and its subdomains. The popup works out the main domain with a short list of country suffixes (`co.uk`, `com.au`, …). For other multi-part suffixes, edit the entry in Settings.
+
+The browser-level shortcuts (`Ctrl/Cmd+Shift+S/M/L`) belong to the browser, so it keeps those keys on every site. On a switched-off site they do nothing. If they clash with a site's own shortcuts, clear them at `chrome://extensions/shortcuts`.
+
 ## Generic HTML5 Video Support
 
 SceneMarks content scripts run on all pages (`<all_urls>`) at `document_start`, so generic HTML5 video pages are detected automatically without opening the popup first. The popup-injection path (`activeTab` plus `scripting`) still exists as a fallback for pages where the auto-loaded script could not run.
@@ -124,7 +137,7 @@ Everything stays in this browser profile's `chrome.storage.local`, split so that
 | Key | Holds |
 |---|---|
 | `video:<videoKey>` | One saved video: its identity, up to five recent page URLs, its favorite flag and its scenes |
-| `settings` | Settings and page hotkeys |
+| `settings` | Settings, page hotkeys, the pause switch and the switched-off sites (at most 200) |
 | `activeRangeDraft` | A started, unfinished range (dropped after 24 hours) |
 | `pendingJump` | A jump queued for a video opening in a new tab (dropped after 15 minutes) |
 | `schemaVersion` | The storage layout version, currently 2 |
@@ -165,6 +178,7 @@ Do this first on a normal HTML5 video before trying streaming sites:
 7. Open Library and confirm search plus export/import, and that a save in another tab shows up without reloading the library page.
 8. Favorite a video from its card header (works while collapsed) and a timestamp from its row, then check **Favorites only**: both videos appear — the favorited video with all its scenes, the other with only the favorited timestamp.
 9. In the overlay, toggle **Favorites** in the Library view and confirm the same filtering, then press **Random** to shuffle within the favorites.
+10. Serve the test page over `http://localhost` (for example `python3 -m http.server`) and press **Turn off here** in the popup. Confirm that the overlay disappears, page hotkeys do nothing, and the toolbar badge reads **OFF**. Then open a scene from the Library and confirm the jump still lands. Press **Turn on here** and confirm everything comes back without a reload. Repeat with **Pause everywhere** / **Resume**, which also covers `file://` pages.
 
 Then test on Netflix, Prime Video, and Hotstar/JioHotstar:
 
