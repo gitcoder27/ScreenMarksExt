@@ -28,15 +28,18 @@ function legacyVideo() {
 // Loads the real worker script, in a fresh context per call (its top-level
 // consts cannot be declared twice), against a chrome double that counts
 // storage reads and logs writes, so a test can tell what a bare worker
-// start costs.
+// start costs. Pass a previous result's `store` and `session` as options to
+// simulate the worker waking again within the same extension load.
 function loadWorker(seedEntries, options) {
+  const { store: sharedStore, session: sharedSession } = options || {};
   const listeners = {};
   const event = (name) => ({
     addListener(fn) {
       (listeners[name] = listeners[name] || []).push(fn);
     }
   });
-  const store = createStorageArea(seedEntries);
+  const store = sharedStore || createStorageArea(seedEntries);
+  const session = sharedSession || {};
   const openedTabs = [];
   const openTabs = (options && options.tabs) || [];
   // The latest badge text set per tab id.
@@ -71,40 +74,78 @@ function loadWorker(seedEntries, options) {
       },
       onUpdated: event("tabs.onUpdated")
     },
-    storage: { local: store.local, onChanged: event("storage.onChanged") }
+    storage: {
+      local: store.local,
+      onChanged: event("storage.onChanged"),
+      // chrome.storage.session: survives worker restarts, cleared when the
+      // extension is disabled, reloaded or the browser restarts.
+      session: {
+        get: async (key) => (key in session ? { [key]: session[key] } : {}),
+        set: async (values) => {
+          Object.assign(session, values);
+        }
+      }
+    }
   };
 
   const file = path.join(WORKER_DIR, "service-worker.js");
   vm.runInContext(fs.readFileSync(file, "utf8"), context, { filename: file });
-  return { badges, context, listeners, openedTabs, store };
+  return { badges, context, listeners, openedTabs, store, session };
 }
 
 function settle() {
   return new Promise((resolve) => setTimeout(resolve, 50));
 }
 
-test("a worker wake does not read storage; install and browser start migrate", async () => {
-  // A schema-1 library holding a video saved before the YouTube adapter.
-  const { listeners, store } = loadWorker({
+test("enabling the extension migrates without an install or startup event", async () => {
+  // Enabling a disabled unpacked extension fires neither onInstalled nor
+  // onStartup: the worker has to notice the schema-1 blob on its own.
+  const { store } = loadWorker({
     scenemarksState: { videos: { [LEGACY_KEY]: legacyVideo() }, settings: { duplicateThresholdSeconds: 7 } }
   });
-  await settle();
-  assert.equal(store.reads, 0);
-
-  // Install/update splits the blob into per-video keys, then re-keys the
-  // generic video.
-  listeners.onInstalled.forEach((listener) => listener({ reason: "update" }));
   await settle();
   assert.deepEqual(store.keys(), ["schemaVersion", "settings", `video:${MIGRATED_KEY}`]);
   assert.equal(store.raw("schemaVersion"), 2);
   assert.equal(store.raw("settings").duplicateThresholdSeconds, 7);
   assert.deepEqual(store.raw(`video:${MIGRATED_KEY}`).scenes.map((scene) => scene.id), ["scene_1"]);
+});
 
-  // Nothing left to migrate: browser start reads but does not rewrite.
-  const writesBefore = store.writes;
+test("a later wake in the same load does not read storage; install and browser start re-check", async () => {
+  const first = loadWorker({
+    scenemarksState: { videos: { [LEGACY_KEY]: legacyVideo() } }
+  });
+  await settle();
+  assert.equal(first.session.migrationsChecked, true);
+
+  // The worker stopped and woke again: the session flag spares the reads.
+  const readsBefore = first.store.reads;
+  const writesBefore = first.store.writes;
+  const { listeners } = loadWorker(null, { store: first.store, session: first.session });
+  await settle();
+  assert.equal(first.store.reads, readsBefore);
+
+  // Nothing left to migrate: install and browser start share the settled
+  // run, and a fresh load (empty session) reads but does not rewrite.
+  listeners.onInstalled.forEach((listener) => listener({ reason: "update" }));
   listeners.onStartup.forEach((listener) => listener());
   await settle();
-  assert.equal(store.writes, writesBefore);
+  assert.equal(first.store.reads, readsBefore);
+
+  loadWorker(null, { store: first.store, session: {} });
+  await settle();
+  assert.ok(first.store.reads > readsBefore);
+  assert.equal(first.store.writes, writesBefore);
+});
+
+test("a wake without the session flag checks again (a failed pass never sets it)", async () => {
+  const first = loadWorker({
+    scenemarksState: { videos: { [LEGACY_KEY]: legacyVideo() } }
+  });
+  // A pass that died before setting the flag leaves it unset.
+  delete first.session.migrationsChecked;
+  const second = loadWorker(null, { store: first.store, session: first.session });
+  await settle();
+  assert.equal(second.session.migrationsChecked, true);
 });
 
 test("an import of legacy data is migrated right after it lands", async () => {

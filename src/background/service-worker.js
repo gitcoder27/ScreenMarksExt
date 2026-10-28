@@ -13,20 +13,50 @@ importScripts(
   "../shared/migrations.js"
 );
 
-// Migrations run on install/update, on browser start and after an import:
-// the split of the schema-1 blob into per-video keys, then the re-keying of
-// videos saved before their site had an adapter. Neither runs on every
-// worker start, because MV3 workers stop after ~30 s idle and each wake
-// would pay for it. Both are safe to re-run and write nothing when there
-// is nothing to migrate.
-function runMigrations() {
-  SceneMarks.Migrations.runAll().catch((error) => {
-    console.warn("SceneMarks migration failed:", error);
-  });
+// Migrations: the split of the schema-1 blob into per-video keys, then the
+// re-keying of videos saved before their site had an adapter. Both are safe
+// to re-run and write nothing when there is nothing to migrate.
+//
+// They run once per extension load, not on every worker wake (MV3 workers
+// stop after ~30 s idle and each wake would pay for it). "Once per load" is
+// tracked with a chrome.storage.session flag, which the browser clears when
+// the extension is disabled, re-enabled or reloaded and when the browser
+// restarts. install/update and browser start alone are not enough: enabling
+// a disabled unpacked extension fires neither, so a library still in the old
+// layout would stay invisible. An import forces a run.
+const MIGRATIONS_CHECKED_FLAG = "migrationsChecked";
+let migrationRun = null;
+
+async function runMigrationsOncePerLoad() {
+  const session = chrome.storage.session;
+  if (session) {
+    const flags = await session.get(MIGRATIONS_CHECKED_FLAG);
+    if (flags[MIGRATIONS_CHECKED_FLAG]) {
+      return;
+    }
+  }
+
+  await SceneMarks.Migrations.runAll();
+  if (session) {
+    await session.set({ [MIGRATIONS_CHECKED_FLAG]: true });
+  }
 }
 
-chrome.runtime.onInstalled.addListener(runMigrations);
-chrome.runtime.onStartup.addListener(runMigrations);
+function runMigrations({ force = false } = {}) {
+  // Concurrent triggers (worker start plus onInstalled) share one run.
+  if (!migrationRun || force) {
+    const run = force ? SceneMarks.Migrations.runAll() : runMigrationsOncePerLoad();
+    migrationRun = run.catch((error) => {
+      console.warn("SceneMarks migration failed:", error);
+    });
+  }
+
+  return migrationRun;
+}
+
+runMigrations();
+chrome.runtime.onInstalled.addListener(() => runMigrations());
+chrome.runtime.onStartup.addListener(() => runMigrations());
 
 const CONTENT_SCRIPT_FILES = [
   "src/shared/constants.js",
@@ -479,7 +509,7 @@ async function handleStorageRpc(payload, sender) {
   const result = await SceneMarks.Storage[method](...args);
   if (method === "importState") {
     // An import can bring back keys saved before an adapter existed.
-    runMigrations();
+    runMigrations({ force: true });
   }
 
   return { ok: true, result };

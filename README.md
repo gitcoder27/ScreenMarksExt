@@ -15,7 +15,7 @@ It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#da
 - Page-level customizable hotkeys from the extension settings page.
 - Settings page showing how much local `chrome.storage` space SceneMarks uses.
 - Browser command shortcuts for quick save, range toggle, and library.
-- Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key when the extension is installed or updated, when the browser starts, and after an import.)
+- Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key when the extension is installed, updated, enabled or reloaded, when the browser starts, and after an import.)
 - Library page with search, filters, favorites, edit/delete, copy share text, export, import, a Random pick button, and a batch Open Random that opens a chosen number of random videos (up to 10 at a time) in new tabs.
 - Favorites at both levels: star entire videos or individual timestamps from the library, the overlay, or the popup. The library's and overlay's favorites filters include any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.
@@ -144,7 +144,7 @@ Everything stays in this browser profile's `chrome.storage.local`, split so that
 
 Saving, editing or favoriting a scene writes only that video's key, so every open tab is told about one video instead of the whole library, and the cost of a save does not grow with the library. All writes run in the service worker, one at a time.
 
-Versions before schema 2 kept everything in one `scenemarksState` key. When the extension is installed or updated, when the browser starts, and after an import, SceneMarks moves that data into the keys above, then deletes the old key. The move is safe to repeat: if it fails, the old key stays for the next attempt, and once it is done it writes nothing.
+Versions before schema 2 kept everything in one `scenemarksState` key. When the extension is installed, updated, re-enabled or reloaded, when the browser starts, and after an import, SceneMarks moves that data into the keys above, then deletes the old key. The move is safe to repeat: if it fails, the old key stays for the next attempt, and once it is done it writes nothing.
 
 Library exports are a single JSON object (`schemaVersion`, `videos`, `settings`, ...) whatever the storage layout, and import accepts exports from any version.
 
