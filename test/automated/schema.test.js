@@ -258,3 +258,30 @@ test("normalizeSettings fills voice defaults and caps its fields", () => {
   assert.equal(Schema.normalizeSettings({ voice: { sensitivity: "abc" } }).voice.sensitivity, 0.5);
   assert.equal(Schema.normalizeSettings({ voice: "on" }).voice.enabled, false);
 });
+
+test("normalizeVoiceProfile keeps known commands with well-formed templates only", () => {
+  const { MAX_VOICE_SAMPLES, MAX_VOICE_TEMPLATE_FRAMES, VOICE_FEATURE_VERSION, VOICE_MFCC_COEFFS } = SceneMarks.Constants;
+  const template = (frames, fill = 0.123) => ({ frames, data: new Array(frames * VOICE_MFCC_COEFFS).fill(fill) });
+  const profile = Schema.normalizeVoiceProfile({
+    featureVersion: VOICE_FEATURE_VERSION,
+    commands: {
+      next: [template(3), template(4), template(5), template(6)],
+      back: [template(2), { frames: 2, data: [1, 2, 3] }, template(MAX_VOICE_TEMPLATE_FRAMES + 1)],
+      pause: [{ frames: 1, data: new Array(VOICE_MFCC_COEFFS).fill("1") }],
+      play: [{ frames: 1, data: [...new Array(VOICE_MFCC_COEFFS - 1).fill(0), Number.NaN] }],
+      mark: "not a list",
+      __proto__: [template(1)],
+      shout: [template(2)]
+    },
+    extra: "dropped"
+  });
+
+  assert.deepEqual(Object.keys(profile), ["featureVersion", "commands"]);
+  assert.deepEqual(Object.keys(profile.commands), ["next", "back"]);
+  assert.equal(profile.commands.next.length, MAX_VOICE_SAMPLES);
+  assert.deepEqual(profile.commands.back.map((sample) => sample.frames), [2]);
+  assert.equal(profile.commands.next[0].data[0], 0.12); // Rounded to 2 decimals.
+
+  assert.deepEqual(Schema.normalizeVoiceProfile(null), { featureVersion: VOICE_FEATURE_VERSION, commands: {} });
+  assert.equal(Schema.normalizeVoiceProfile({ featureVersion: 99, commands: {} }).featureVersion, 99);
+});

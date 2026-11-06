@@ -46,6 +46,13 @@
         "mac": "Command+Shift+L"
       },
       "description": "Open SceneMarks library"
+    },
+    "toggle-voice": {
+      "suggested_key": {
+        "default": "Alt+Shift+V",
+        "mac": "Alt+Shift+V"
+      },
+      "description": "Turn voice commands on or off"
     }
   },
   "content_scripts": [

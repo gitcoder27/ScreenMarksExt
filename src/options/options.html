@@ -139,26 +139,57 @@
           <button id="openBrowserShortcutsButton" class="secondary-button" type="button">Open Browser Shortcut Settings</button>
         </section>
 
-        <section class="settings-section">
-          <h2>Voice (Phase 0 spike)</h2>
-          <p class="hint">Temporary test panel. Grant the microphone here once; the hidden background listener then uses the same permission.</p>
-          <div class="voice-spike-buttons">
-            <button id="voiceGrantButton" class="secondary-button" type="button">1. Grant Microphone</button>
-            <button id="voiceStartButton" class="secondary-button" type="button">2. Start Background Listening</button>
-            <button id="voiceStopButton" class="secondary-button" type="button">Stop</button>
-          </div>
-          <label>
-            Microphone
-            <select id="voiceMicSelect"></select>
+        <section id="voice" class="settings-section">
+          <h2>Voice Commands</h2>
+          <label class="switch-row">
+            <input id="voiceEnabled" type="checkbox">
+            <span>Listen for voice commands</span>
           </label>
-          <p id="voiceMicHint" class="hint"></p>
-          <div class="voice-meter" aria-hidden="true"><div id="voiceMeterFill" class="voice-meter__fill"></div></div>
-          <pre id="voiceSpikeStatus" class="voice-spike-status">No status yet.</pre>
-          <div class="voice-spike-buttons">
-            <button id="voiceResetButton" class="secondary-button" type="button">Reset Counters</button>
-            <button id="voiceCopyButton" type="button">Copy Report</button>
-            <span id="voiceCopyResult" class="hint" role="status"></span>
+          <p class="hint">Say a word to jump between saved timestamps, pause, play, save a moment or move through a lineup of videos. Recognition runs on this computer against your own recordings: no AI model, no network. While it is on, the browser's microphone indicator stays lit. Turn it on or off here, from the toolbar popup, or with the "Turn voice commands on or off" browser shortcut (Alt+Shift+V by default).</p>
+
+          <div class="voice-step">
+            <h3>1. Microphone</h3>
+            <div class="voice-row">
+              <button id="voiceGrantButton" class="secondary-button" type="button">Allow Microphone</button>
+              <span id="voicePermissionLabel" class="hint"></span>
+            </div>
+            <label>
+              Microphone
+              <select id="voiceMicSelect"></select>
+            </label>
+            <p id="voiceMicHint" class="hint"></p>
+            <p class="hint">On macOS, the browser also needs microphone access in System Settings &rarr; Privacy &amp; Security &rarr; Microphone.</p>
           </div>
+
+          <div class="voice-step">
+            <h3>2. Record your words</h3>
+            <p class="hint">Record each word 3 times, the way you will say it while watching. Any word in any language works; short words that sound clearly different (like "skip" and "next") are told apart best. You only need the commands you will use.</p>
+            <div class="voice-meter" aria-hidden="true"><div id="voiceMeterFill" class="voice-meter__fill"></div></div>
+            <p id="voiceTrainStatus" class="voice-train-status" role="status"></p>
+            <ul id="voiceWordList" class="voice-word-list"></ul>
+            <div class="voice-row">
+              <button id="voiceClearAllButton" class="secondary-button" type="button">Clear All Words</button>
+            </div>
+          </div>
+
+          <div class="voice-step">
+            <h3>3. Test</h3>
+            <p class="hint">Say your words and see what SceneMarks hears. Nothing runs while the test is on.</p>
+            <div class="voice-row">
+              <button id="voiceTestButton" class="secondary-button" type="button">Start Test</button>
+            </div>
+            <p id="voiceTestResult" class="voice-test-result" role="status"></p>
+          </div>
+
+          <details class="voice-diagnostics">
+            <summary>Diagnostics</summary>
+            <pre id="voiceDiagnostics" class="voice-diagnostics__status">Voice commands are off.</pre>
+            <div class="voice-row">
+              <button id="voiceResetButton" class="secondary-button" type="button">Reset Counters</button>
+              <button id="voiceCopyButton" class="secondary-button" type="button">Copy Report</button>
+              <span id="voiceCopyResult" class="hint" role="status"></span>
+            </div>
+          </details>
         </section>
 
         <section class="settings-section danger-section">
@@ -186,6 +217,8 @@
     <script src="../shared/schema.js"></script>
     <script src="../shared/storage.js"></script>
     <script src="options.js"></script>
-    <script src="voice-spike.js"></script>
+    <script src="../voice/voice-features.js"></script>
+    <script src="../voice/voice-capture.js"></script>
+    <script src="voice-options.js"></script>
   </body>
 </html>

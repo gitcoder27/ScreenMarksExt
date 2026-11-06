@@ -13,7 +13,11 @@
     SCHEMA_VERSION: "schemaVersion",
     SETTINGS: "settings",
     ACTIVE_RANGE_DRAFT: "activeRangeDraft",
-    PENDING_JUMP: "pendingJump"
+    PENDING_JUMP: "pendingJump",
+    // The user's recorded voice-command templates. Fixed size (a few
+    // samples per command), written only while training; device-specific,
+    // so it is left out of export and kept by a replacing import.
+    VOICE_PROFILE: "voiceProfile"
   });
   const RANGE_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
   const PENDING_JUMP_TTL_MS = 15 * 60 * 1000;
@@ -90,17 +94,38 @@
     GET_ACTIVE_TAB_CONTEXT: "SCENEMARKS_GET_ACTIVE_TAB_CONTEXT",
     FORWARD_TO_ACTIVE_TAB: "SCENEMARKS_FORWARD_TO_ACTIVE_TAB",
     STORAGE_RPC: "SCENEMARKS_STORAGE_RPC",
-    // Phase 0 spike: an extension page asks the worker to open or close the
-    // offscreen microphone document.
-    VOICE_SPIKE_START: "SCENEMARKS_VOICE_SPIKE_START",
-    VOICE_SPIKE_STOP: "SCENEMARKS_VOICE_SPIKE_STOP",
-    // Offscreen document -> worker: read the voice settings (the offscreen
-    // document has no chrome.storage).
+    // Offscreen voice engine -> worker: read the voice settings and
+    // templates (the offscreen document has no chrome.storage).
     VOICE_GET_CONFIG: "SCENEMARKS_VOICE_GET_CONFIG",
-    // Worker -> offscreen document: voice settings changed, read them again.
-    VOICE_CONFIG_CHANGED: "SCENEMARKS_VOICE_CONFIG_CHANGED"
+    // Worker -> offscreen engine: voice settings or templates changed.
+    VOICE_CONFIG_CHANGED: "SCENEMARKS_VOICE_CONFIG_CHANGED",
+    // Offscreen engine -> worker: a command word was recognized.
+    VOICE_COMMAND: "SCENEMARKS_VOICE_COMMAND",
+    // Worker -> content script: run a voice action on this tab.
+    VOICE_ACTION: "SCENEMARKS_VOICE_ACTION"
   });
+
+  // The spoken commands, in training-screen order. The user records their
+  // own word for each, so the "say" text is only a suggestion.
+  const VOICE_COMMANDS = Object.freeze([
+    Object.freeze({ id: "next", say: "next", label: "Next saved timestamp" }),
+    Object.freeze({ id: "back", say: "back", label: "Previous saved timestamp" }),
+    Object.freeze({ id: "pause", say: "pause", label: "Pause" }),
+    Object.freeze({ id: "play", say: "play", label: "Play" }),
+    Object.freeze({ id: "mark", say: "mark", label: "Quick-save the current time" }),
+    Object.freeze({ id: "skip", say: "skip", label: "Next video in the lineup, at its first mark" }),
+    Object.freeze({ id: "return", say: "return", label: "Previous video in the lineup, at its first mark" }),
+    Object.freeze({ id: "random", say: "random", label: "Open a random saved video" })
+  ]);
   const MAX_VOICE_MIC_FIELD_LENGTH = 300;
+  const MAX_VOICE_SAMPLES = 3;
+  // 13 MFCCs per 10 ms frame; a template holds at most 1.5 s of speech.
+  const VOICE_MFCC_COEFFS = 13;
+  const MAX_VOICE_TEMPLATE_FRAMES = 150;
+  // Bumped whenever feature extraction changes: templates recorded with
+  // another version no longer match and must be recorded again.
+  const VOICE_FEATURE_VERSION = 1;
+  const VOICE_COOLDOWN_MS = 700;
 
   // The offscreen voice engine reports status to open extension pages on
   // this BroadcastChannel (same extension origin) instead of
@@ -118,12 +143,18 @@
     MAX_TAG_LENGTH,
     MAX_TAGS,
     MAX_VOICE_MIC_FIELD_LENGTH,
+    MAX_VOICE_SAMPLES,
+    MAX_VOICE_TEMPLATE_FRAMES,
     MESSAGE_TYPES,
     PENDING_JUMP_TTL_MS,
     RANGE_DRAFT_TTL_MS,
     SCHEMA_VERSION,
     STORAGE_KEYS,
     VIDEO_KEY_PREFIX,
+    VOICE_COMMANDS,
+    VOICE_COOLDOWN_MS,
+    VOICE_FEATURE_VERSION,
+    VOICE_MFCC_COEFFS,
     VOICE_STATUS_CHANNEL
   };
 

@@ -29,6 +29,14 @@
         </div>
       </section>
 
+      <section class="site-controls voice-controls" aria-label="Voice commands">
+        <div class="site-controls__row">
+          <p><strong>Voice</strong> <span id="voiceStatusLabel">Off</span></p>
+          <button id="voiceToggleButton" type="button">Turn on</button>
+        </div>
+        <p id="voiceDetailLabel" class="voice-controls__detail" hidden></p>
+      </section>
+
       <section id="statusBox" class="status-box" role="status"></section>
 
       <section id="videoPanel" class="video-panel" hidden>
@@ -90,5 +98,6 @@
     <script src="../shared/schema.js"></script>
     <script src="../shared/storage.js"></script>
     <script src="popup.js"></script>
+    <script src="popup-voice.js"></script>
   </body>
 </html>

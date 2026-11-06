@@ -28,6 +28,7 @@ class FakeElement {
   }
   append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } }
   remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((node) => node !== this); }
+  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   get firstChild() { return this.children[0] || null; }
   setAttribute(key, value) { this.attributes[key] = value; }
   closest(selector) { return selector.split(",").some((part) => part.trim().toUpperCase() === this.tagName) ? this : null; }

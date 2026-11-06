@@ -18,6 +18,7 @@ function loadContent(options = {}) {
       detectorOptions = callbacks;
       return {
         getSnapshot: () => ({ ...snapshot }), start() {}, stop() {}, scheduleScan() {},
+        getActiveVideo: () => (options.video === undefined ? null : options.video),
         async seekTo(seconds, behavior, opts) {
           seeks.push({ seconds, behavior, opts });
           return options.seek ? options.seek(seconds, opts) : { ok: true };
@@ -169,4 +170,107 @@ test("queued retries stop on cancellation, expiry, and navigation", async () => 
     await work.advance(10000);
     assert.equal(work.seeks.length, 1, stop);
   }
+});
+
+// ---- Voice actions -------------------------------------------------------
+function fakeVideo({ blockPlay = false } = {}) {
+  const calls = [];
+  return {
+    calls,
+    paused: false,
+    pause() { calls.push("pause"); this.paused = true; },
+    play() {
+      calls.push("play");
+      if (blockPlay) return Promise.reject(new Error("NotAllowedError"));
+      this.paused = false;
+      return Promise.resolve();
+    }
+  };
+}
+
+function seededScenes(note = "confidential note") {
+  const key = SNAPSHOT.videoKey;
+  return {
+    [`video:${key}`]: {
+      videoKey: key, platform: "generic", title: "Secret title", canonicalUrl: SNAPSHOT.canonicalUrl,
+      rawUrls: [SNAPSHOT.rawUrl], createdAt: "2025-01-01T00:00:00.000Z", updatedAt: "2025-01-01T00:00:00.000Z",
+      scenes: [
+        { id: "a", startSeconds: 30, note, createdAt: "2025-01-01T00:00:00.000Z" },
+        { id: "b", startSeconds: 90, note, createdAt: "2025-01-01T00:00:00.000Z" }
+      ]
+    }
+  };
+}
+
+function voice(work, action, extra = {}) {
+  return work.send({ type: "SCENEMARKS_VOICE_ACTION", payload: { action, heard: action, ...extra } });
+}
+
+test("voice next and back jump between saved timestamps and say so without saved text", async () => {
+  const work = loadContent({ seed: seededScenes() });
+  await flush();
+  const next = await voice(work, "next");
+  assert.equal(next.ok, true);
+  assert.equal(next.message, "Jumped to 01:30 (2/2)");
+  assert.deepEqual(work.seeks.map(({ seconds }) => seconds), [90]);
+  assert.match(pageText(work), /Voice: next · Jumped to 01:30 \(2\/2\)/);
+
+  work.setSnapshot({ currentTimeSeconds: 90 });
+  assert.equal((await voice(work, "back")).message, "Jumped to 00:30 (1/2)");
+  assert.doesNotMatch(pageText(work), /confidential|Secret title/);
+  // Only fixed fields travel back to the worker.
+  assert.deepEqual(Object.keys(next).sort(), ["error", "message", "ok"]);
+});
+
+test("voice pause and play drive the video, and a blocked play says how to continue", async () => {
+  const video = fakeVideo();
+  const work = loadContent({ video });
+  await flush();
+  assert.equal((await voice(work, "pause")).message, "Paused");
+  assert.equal((await voice(work, "play")).message, "Playing");
+  assert.deepEqual(video.calls, ["pause", "play"]);
+
+  const blocked = loadContent({ video: fakeVideo({ blockPlay: true }) });
+  await flush();
+  const result = await voice(blocked, "play");
+  assert.equal(result.ok, false);
+  assert.match(result.error, /press Space/);
+
+  const none = loadContent({ video: null });
+  await flush();
+  assert.equal((await voice(none, "pause")).ok, false);
+});
+
+test("voice mark saves the current time even when quick save asks for a note", async () => {
+  const work = loadContent({ seed: { settings: { quickSaveRequiresNote: true } } });
+  await flush();
+  const result = await voice(work, "mark");
+  assert.equal(result.ok, true);
+  assert.equal(result.message, "Saved 01:00");
+  assert.deepEqual(work.store.readState().videos[SNAPSHOT.videoKey].scenes.map((scene) => scene.startSeconds), [60]);
+  // The hotkey path still asks for a note.
+  const hotkey = await work.send({ type: "SCENEMARKS_QUICK_SAVE", payload: {} });
+  assert.equal(hotkey.requiresNote, true);
+});
+
+test("voice actions are refused where SceneMarks is switched off", async () => {
+  const video = fakeVideo();
+  const work = loadContent({ video, seed: { ...seededScenes(), settings: { disabledSites: ["example.com"] } } });
+  await flush();
+  for (const action of ["next", "back", "pause", "play", "mark", "announce"]) {
+    const result = await voice(work, action);
+    assert.equal(result.ok, false, action);
+    assert.equal(result.inactive, true, action);
+  }
+  assert.deepEqual(work.seeks, []);
+  assert.deepEqual(video.calls, []);
+  assert.doesNotMatch(pageText(work), /Voice:/);
+});
+
+test("unknown voice actions do nothing", async () => {
+  const work = loadContent();
+  await flush();
+  const result = await voice(work, "delete-everything");
+  assert.equal(result.ok, false);
+  assert.equal(work.store.writes, 0);
 });

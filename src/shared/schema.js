@@ -185,6 +185,49 @@
     };
   }
 
+  // { featureVersion, commands: { <id>: [{ frames, data }] } } where data is
+  // frames x VOICE_MFCC_COEFFS numbers, row by row. Unknown commands, extra
+  // samples, oversized or malformed templates and non-numeric data are
+  // dropped. Values are rounded to 2 decimals to keep the key small.
+  function normalizeVoiceTemplate(value) {
+    const { MAX_VOICE_TEMPLATE_FRAMES, VOICE_MFCC_COEFFS } = SceneMarks.Constants;
+    if (!value || typeof value !== "object" || !Array.isArray(value.data)) {
+      return null;
+    }
+    const frames = Number(value.frames);
+    if (!Number.isSafeInteger(frames) || frames < 1 || frames > MAX_VOICE_TEMPLATE_FRAMES
+      || value.data.length !== frames * VOICE_MFCC_COEFFS) {
+      return null;
+    }
+    const data = new Array(value.data.length);
+    for (let i = 0; i < value.data.length; i += 1) {
+      const number = value.data[i];
+      if (typeof number !== "number" || !Number.isFinite(number) || Math.abs(number) > 10000) {
+        return null;
+      }
+      data[i] = Math.round(number * 100) / 100;
+    }
+    return { frames, data };
+  }
+
+  function normalizeVoiceProfile(value) {
+    const { MAX_VOICE_SAMPLES, VOICE_COMMANDS, VOICE_FEATURE_VERSION } = SceneMarks.Constants;
+    const source = value && typeof value === "object" ? value : {};
+    const featureVersion = Number.isSafeInteger(source.featureVersion) ? source.featureVersion : VOICE_FEATURE_VERSION;
+    const sourceCommands = source.commands && typeof source.commands === "object" ? source.commands : {};
+    const commands = {};
+    for (const { id } of VOICE_COMMANDS) {
+      if (!Object.prototype.hasOwnProperty.call(sourceCommands, id) || !Array.isArray(sourceCommands[id])) {
+        continue;
+      }
+      const samples = sourceCommands[id].map(normalizeVoiceTemplate).filter(Boolean).slice(0, MAX_VOICE_SAMPLES);
+      if (samples.length) {
+        commands[id] = samples;
+      }
+    }
+    return { featureVersion, commands };
+  }
+
   function normalizeSettings(value) {
     const source = value && typeof value === "object" ? value : {};
     const duplicateThresholdSeconds = Number(source.duplicateThresholdSeconds);
@@ -396,7 +439,9 @@
     normalizePendingJump,
     normalizeScene,
     normalizeSettings,
+    normalizeVoiceProfile,
     normalizeVoiceSettings,
+    normalizeVoiceTemplate,
     normalizeSiteDomain,
     normalizeState,
     normalizeTags,

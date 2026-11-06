@@ -118,6 +118,25 @@ h2 {
   color: #111827;
 }
 
+.voice-controls__detail {
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.voice-controls__detail[hidden] {
+  display: none;
+}
+
+.voice-controls__detail button {
+  background: none;
+  color: #93c5fd;
+  font-size: 11px;
+  padding: 0;
+  text-decoration: underline;
+}
+
 .status-box {
   background: #1e293b;
   border: 1px solid #334155;

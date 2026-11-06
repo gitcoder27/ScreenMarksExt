@@ -1,298 +1,201 @@
-// Offscreen voice engine. Phase 0 spike: open the chosen microphone, run
-// the voice-activity gate, and report what it hears to open extension
-// pages over a BroadcastChannel. No command matching yet.
+// Offscreen voice engine: listens on the chosen mic, matches each
+// utterance against the user's templates and sends recognized commands to
+// the worker. It runs while settings.voice.enabled is on; the worker opens
+// and closes this document.
 //
-// Offscreen documents get only chrome.runtime, so settings come from the
-// worker (VOICE_GET_CONFIG), and the worker says when they change.
+// Offscreen documents get only chrome.runtime, so settings and templates
+// come from the worker (VOICE_GET_CONFIG), which also says when they
+// change. Status goes to open extension pages (popup, options) over a
+// BroadcastChannel, and only while one of them is asking, so a quiet
+// engine never wakes the worker or does work for nobody.
 (function startVoiceEngine() {
-  const { VoiceFeatures, Constants } = SceneMarks;
-  const { MESSAGE_TYPES } = Constants;
-  const FRAME = VoiceFeatures.FRAME_SAMPLES;
+  const { VoiceFeatures, VoiceCapture, Constants } = SceneMarks;
+  const { MESSAGE_TYPES, VOICE_COOLDOWN_MS, VOICE_FEATURE_VERSION } = Constants;
   const STATUS_INTERVAL_MS = 1000;
+  const INTEREST_MS = 6000;
   const HISTORY_LENGTH = 10;
 
   const channel = new BroadcastChannel(Constants.VOICE_STATUS_CHANNEL);
-  const vad = VoiceFeatures.createVad();
 
-  let context = null;
-  let node = null;
-  let source = null;
-  let stream = null;
-  let config = { micDeviceId: "", micLabel: "" };
-  let restartTimer = null;
-  let opening = null;
-
-  const status = {
-    state: "starting",
-    error: null,
-    micMode: "default",
-    micLabel: null,
-    micNote: null,
-    sampleRate: null,
-    permission: null,
-    pullMode: "worklet",
-    frames: 0,
-    framesPerSecond: 0,
-    levelDb: -100,
-    noiseFloorDb: vad.noiseFloorDb,
-    speaking: false,
-    gateOpenMs: 0,
-    quietDb: -100,
-    utterances: 0,
-    rejected: 0,
-    rejectedBy: {},
-    history: [],
-    busyPercent: 0,
-    busyAvgPercent: 0,
-    busyMaxPercent: 0,
-    listeningSeconds: 0,
-    micRestarts: 0
-  };
-
-  // Main-thread time spent handling audio, as a share of wall time. The
-  // audio thread itself only copies buffers.
-  let busyMs = 0;
-  let busyTotalMs = 0;
-  let windowStart = performance.now();
+  let voice = { ...Constants.DEFAULT_SETTINGS.voice };
+  let library = [];
+  let calibration = null;
+  let staleProfile = false;
+  let lastCommandAt = 0;
+  let suspendedUntil = 0;
+  let interestUntil = 0;
   let listeningSince = null;
-  let framesInWindow = 0;
-  let peakDbInWindow = -100;
-  let quietDbInWindow = 0;
+  let busyTotalMs = 0;
+  let busyMaxPercent = 0;
 
-  function roundPercent(value) {
-    return Math.round(value * 100) / 100;
+  const counters = { utterances: 0, recognized: 0, rejected: 0, rejectedBy: {} };
+  const history = [];
+  let lastHeard = null;
+
+  const capture = VoiceCapture.createCapture({
+    getConfig: () => voice,
+    onUtterance: handleUtterance,
+    onRejected: (result) => {
+      counters.rejected += 1;
+      counters.rejectedBy[result.rejected] = (counters.rejectedBy[result.rejected] || 0) + 1;
+      remember({ rejected: result.rejected });
+    },
+    onStateChange: (status) => {
+      if (status.state === "open" && listeningSince === null) {
+        listeningSince = performance.now();
+      }
+      if (status.state !== "open") {
+        listeningSince = null;
+      }
+      publishSoon();
+    }
+  });
+
+  function remember(entry) {
+    history.unshift({ ...entry, at: Date.now() });
+    history.length = Math.min(history.length, HISTORY_LENGTH);
   }
 
-  function resetCounters() {
-    status.frames = 0;
-    status.utterances = 0;
-    status.rejected = 0;
-    status.rejectedBy = {};
-    status.history = [];
-    status.busyMaxPercent = 0;
-    busyTotalMs = 0;
-    listeningSince = listeningSince === null ? null : performance.now();
+  function engineState() {
+    if (!library.length) return staleProfile ? "retrain" : "not-trained";
+    const state = capture.status.state;
+    if (state === "open") return Date.now() < suspendedUntil ? "suspended" : "listening";
+    return state; // opening | mic-error | closed
+  }
+
+  function snapshot(windowStats) {
+    const listened = listeningSince === null ? 0 : performance.now() - listeningSince;
+    return {
+      kind: "engine-status",
+      at: Date.now(),
+      state: engineState(),
+      trainedCommands: library.map(({ command }) => command),
+      capture: { ...capture.status },
+      window: windowStats,
+      listeningSeconds: Math.round(listened / 1000),
+      busyAvgPercent: listened ? Math.round((busyTotalMs / listened) * 10000) / 100 : 0,
+      busyMaxPercent,
+      counters: { ...counters, rejectedBy: { ...counters.rejectedBy } },
+      history: history.slice(),
+      lastHeard,
+      rule: calibration ? VoiceFeatures.decisionRule(calibration, voice.sensitivity) : null
+    };
   }
 
   function publish() {
-    const now = performance.now();
-    const elapsed = Math.max(1, now - windowStart);
-    status.busyPercent = roundPercent((busyMs / elapsed) * 100);
-    // The first window after a (re)start includes setup; skip it for max.
-    if (listeningSince !== null && now - listeningSince > 2 * STATUS_INTERVAL_MS) {
-      status.busyMaxPercent = Math.max(status.busyMaxPercent, status.busyPercent);
+    const windowStats = capture.takeWindowStats();
+    busyTotalMs += windowStats.busyMs;
+    // The first window after the mic opens includes setup.
+    if (listeningSince !== null && performance.now() - listeningSince > 2 * STATUS_INTERVAL_MS) {
+      busyMaxPercent = Math.max(busyMaxPercent, windowStats.busyPercent);
     }
-    status.framesPerSecond = Math.round((framesInWindow / elapsed) * 1000);
-    status.levelDb = Math.round(peakDbInWindow);
-    status.quietDb = Math.round(quietDbInWindow);
-    status.gateOpenMs = vad.openFrames * 10;
-    status.noiseFloorDb = Math.round(vad.noiseFloorDb);
-    if (listeningSince !== null) {
-      const listened = now - listeningSince;
-      status.listeningSeconds = Math.round(listened / 1000);
-      status.busyAvgPercent = roundPercent((busyTotalMs / Math.max(1, listened)) * 100);
+    if (Date.now() < interestUntil) {
+      channel.postMessage(snapshot(windowStats));
     }
-    busyMs = 0;
-    framesInWindow = 0;
-    windowStart = now;
-    peakDbInWindow = -100;
-    quietDbInWindow = 0;
-    channel.postMessage({ ...status, at: Date.now() });
   }
 
-  function remember(entry) {
-    status.history.unshift({ ...entry, at: Date.now() });
-    status.history.length = Math.min(status.history.length, HISTORY_LENGTH);
+  let publishTimer = null;
+  function publishSoon() {
+    clearTimeout(publishTimer);
+    publishTimer = setTimeout(publish, 50);
   }
 
-  function handleBatch(samples) {
-    const t0 = performance.now();
-    for (let start = 0; start + FRAME <= samples.length; start += FRAME) {
-      const frame = samples.subarray(start, start + FRAME);
-      status.frames += 1;
-      framesInWindow += 1;
-      const db = VoiceFeatures.frameDb(frame, 0, FRAME);
-      if (db > peakDbInWindow) {
-        peakDbInWindow = db;
-      }
-      if (db < quietDbInWindow) {
-        quietDbInWindow = db;
-      }
-      const result = vad.push(frame);
-      status.speaking = vad.active;
-      if (result && result.frames) {
-        status.utterances += 1;
-        remember({ ms: result.frames.length * 10 });
-      } else if (result && result.rejected) {
-        status.rejected += 1;
-        status.rejectedBy[result.rejected] = (status.rejectedBy[result.rejected] || 0) + 1;
-        remember({ rejected: result.rejected });
-      }
+  async function dispatch(command) {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPES.VOICE_COMMAND,
+        payload: { command }
+      });
+      return response || { ok: false, error: "No response." };
+    } catch (error) {
+      return { ok: false, error: (error && error.message) || String(error) };
     }
-    const spent = performance.now() - t0;
-    busyMs += spent;
-    busyTotalMs += spent;
+  }
+
+  async function handleUtterance(utterance) {
+    counters.utterances += 1;
+    if (!library.length || !calibration) {
+      return;
+    }
+    const features = VoiceFeatures.extractFeatures(utterance.samples);
+    if (!features) {
+      counters.rejected += 1;
+      counters.rejectedBy["no-features"] = (counters.rejectedBy["no-features"] || 0) + 1;
+      return;
+    }
+    const result = VoiceFeatures.match(VoiceFeatures.withDeltas(features), library, calibration, voice.sensitivity);
+    const heard = {
+      command: result.command,
+      accepted: result.accepted,
+      reason: result.reason,
+      distance: Math.round(result.distance * 100) / 100,
+      threshold: Math.round(result.threshold * 100) / 100,
+      ratio: result.ratio === null ? null : Math.round(result.ratio * 100) / 100,
+      runnerUp: result.runnerUp ? result.runnerUp.command : null,
+      at: Date.now()
+    };
+
+    const now = Date.now();
+    if (result.accepted && now < suspendedUntil) {
+      heard.outcome = "test-only";
+    } else if (result.accepted && now - lastCommandAt < VOICE_COOLDOWN_MS) {
+      heard.outcome = "cooldown";
+    } else if (result.accepted) {
+      lastCommandAt = now;
+      counters.recognized += 1;
+      heard.outcome = "sent";
+      lastHeard = heard;
+      remember({ command: result.command, accepted: true });
+      publishSoon();
+      const response = await dispatch(result.command);
+      heard.result = response.ok ? (response.message || "Done") : (response.error || "Failed");
+      heard.ok = Boolean(response.ok);
+    } else {
+      remember({ command: result.command, accepted: false, reason: result.reason });
+    }
+    lastHeard = heard;
+    publishSoon();
+  }
+
+  function applyProfile(profile) {
+    const usable = profile && profile.featureVersion === VOICE_FEATURE_VERSION ? profile : null;
+    staleProfile = Boolean(profile && profile.commands && Object.keys(profile.commands).length && !usable);
+    library = usable ? VoiceFeatures.prepareLibrary(usable) : [];
+    calibration = library.length ? VoiceFeatures.calibrate(library) : null;
+    if (!calibration) {
+      library = [];
+    }
   }
 
   async function loadConfig() {
+    let response = null;
     try {
-      const response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.VOICE_GET_CONFIG });
-      if (response && response.ok) {
-        config = { micDeviceId: response.micDeviceId || "", micLabel: response.micLabel || "" };
-      }
+      response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.VOICE_GET_CONFIG });
     } catch (_error) {
-      // Keep the last config; the default mic still works.
+      response = null;
     }
+    if (!response || !response.ok) {
+      return false;
+    }
+    const previousMic = `${voice.micDeviceId}\n${voice.micLabel}`;
+    voice = { ...voice, ...response.voice };
+    applyProfile(response.profile);
+    return previousMic !== `${voice.micDeviceId}\n${voice.micLabel}`;
   }
 
-  // A pinned mic is found by ID, then by label (IDs can change when a
-  // device is re-paired). If it is not connected, use the system default.
-  async function resolveDevice() {
-    status.micNote = null;
-    if (!config.micDeviceId) {
-      status.micMode = "default";
-      return null;
+  // The mic is open only when there is something to listen for.
+  async function syncCapture({ micChanged = false } = {}) {
+    const shouldListen = library.length > 0;
+    const isOpen = capture.status.state !== "closed";
+    if (shouldListen && !isOpen) {
+      await capture.start();
+    } else if (!shouldListen && isOpen) {
+      await capture.stop();
+    } else if (shouldListen && micChanged) {
+      capture.restart("mic-setting-changed");
     }
-    status.micMode = "pinned";
-    const inputs = (await navigator.mediaDevices.enumerateDevices())
-      .filter((device) => device.kind === "audioinput");
-    const match = inputs.find((device) => device.deviceId === config.micDeviceId)
-      || (config.micLabel && inputs.find((device) => device.label === config.micLabel));
-    if (match) {
-      return match.deviceId;
-    }
-    status.micMode = "pinned-missing";
-    status.micNote = `Chosen mic "${config.micLabel || config.micDeviceId}" is not connected; using the system default.`;
-    return null;
+    publishSoon();
   }
-
-  async function ensureGraph() {
-    if (context) {
-      return;
-    }
-    context = new AudioContext({ sampleRate: VoiceFeatures.SAMPLE_RATE });
-    status.sampleRate = context.sampleRate;
-    await context.audioWorklet.addModule("capture-worklet.js");
-    node = new AudioWorkletNode(context, "scenemarks-capture", {
-      numberOfInputs: 1,
-      numberOfOutputs: 0,
-      processorOptions: { batchSamples: FRAME * 10 }
-    });
-    node.port.onmessage = (event) => handleBatch(event.data);
-  }
-
-  function closeMic() {
-    if (source) {
-      source.disconnect();
-      source = null;
-    }
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      stream = null;
-    }
-  }
-
-  async function openMicNow() {
-    const deviceId = await resolveDevice();
-    const audio = {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true
-    };
-    if (deviceId) {
-      audio.deviceId = { exact: deviceId };
-    }
-
-    let next;
-    try {
-      next = await navigator.mediaDevices.getUserMedia({ audio });
-    } catch (error) {
-      closeMic();
-      status.state = "mic-error";
-      status.error = `${error.name}: ${error.message}`;
-      publish();
-      return;
-    }
-
-    closeMic();
-    stream = next;
-    const track = stream.getAudioTracks()[0];
-    status.micLabel = track ? track.label : null;
-    status.error = null;
-    if (track) {
-      track.addEventListener("ended", () => scheduleRestart("mic-ended"));
-    }
-
-    await ensureGraph();
-    source = context.createMediaStreamSource(stream);
-    source.connect(node);
-    if (context.state === "suspended") {
-      await context.resume().catch(() => {});
-    }
-    vad.reset();
-    if (listeningSince === null) {
-      listeningSince = performance.now();
-      checkPull();
-    }
-    status.state = "listening";
-    publish();
-  }
-
-  // Serialize opens so a burst of device changes cannot interleave.
-  function openMic() {
-    opening = (opening || Promise.resolve()).then(openMicNow, openMicNow);
-    return opening;
-  }
-
-  function scheduleRestart(reason) {
-    clearTimeout(restartTimer);
-    restartTimer = setTimeout(() => {
-      status.micRestarts += 1;
-      status.lastRestartReason = reason;
-      openMic();
-    }, 500);
-  }
-
-  // A sink node with no outputs should still be pulled; if this browser
-  // does not, route the mic through a muted gain to the destination.
-  function checkPull() {
-    setTimeout(() => {
-      if (status.frames > 0 || !source) {
-        return;
-      }
-      status.pullMode = "muted-destination";
-      node.disconnect();
-      node = new AudioWorkletNode(context, "scenemarks-capture", {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        processorOptions: { batchSamples: FRAME * 10 }
-      });
-      node.port.onmessage = (event) => handleBatch(event.data);
-      const mute = context.createGain();
-      mute.gain.value = 0;
-      source.disconnect();
-      source.connect(node).connect(mute).connect(context.destination);
-    }, 1500);
-  }
-
-  async function start() {
-    try {
-      const permission = await navigator.permissions.query({ name: "microphone" });
-      status.permission = permission.state;
-      permission.onchange = () => {
-        status.permission = permission.state;
-      };
-    } catch (_error) {
-      status.permission = "unknown";
-    }
-    await loadConfig();
-    await openMic();
-  }
-
-  // Plugging headphones in or out changes the default input and can take
-  // a pinned mic away or bring it back, so re-pick the mic.
-  navigator.mediaDevices.addEventListener("devicechange", () => scheduleRestart("device-change"));
 
   chrome.runtime.onMessage.addListener((message, sender) => {
     if (!message || message.type !== MESSAGE_TYPES.VOICE_CONFIG_CHANGED) {
@@ -301,21 +204,41 @@
     if (!sender || !String(sender.url || "").startsWith(chrome.runtime.getURL(""))) {
       return false;
     }
-    loadConfig().then(() => scheduleRestart("mic-setting-changed"));
+    loadConfig().then((micChanged) => syncCapture({
+      micChanged: micChanged || capture.status.state === "mic-error"
+    }));
     return false;
   });
 
+  // Extension pages talk to the engine on the status channel:
+  //   status-request  - "I am showing status": publish for a few seconds.
+  //   suspend { ms }  - training or testing on the options page: keep
+  //                     listening but run no commands until then.
+  //   retry-mic       - the options page was just granted the microphone.
+  //   reset-counters  - diagnostics.
   channel.onmessage = (event) => {
-    if (event.data && event.data.command === "reset-counters") {
-      resetCounters();
-      publish();
+    const data = event.data || {};
+    if (data.command === "retry-mic") {
+      if (capture.status.state === "mic-error") capture.restart("permission-granted");
+    } else if (data.command === "status-request") {
+      interestUntil = Date.now() + INTEREST_MS;
+      publishSoon();
+    } else if (data.command === "suspend") {
+      const ms = Math.min(Math.max(Number(data.ms) || 0, 0), 10000);
+      suspendedUntil = Date.now() + ms;
+    } else if (data.command === "reset-counters") {
+      counters.utterances = 0;
+      counters.recognized = 0;
+      counters.rejected = 0;
+      counters.rejectedBy = {};
+      history.length = 0;
+      busyTotalMs = 0;
+      busyMaxPercent = 0;
+      if (listeningSince !== null) listeningSince = performance.now();
+      publishSoon();
     }
   };
 
   setInterval(publish, STATUS_INTERVAL_MS);
-  start().catch((error) => {
-    status.state = "error";
-    status.error = (error && error.message) || String(error);
-    publish();
-  });
+  loadConfig().then(() => syncCapture());
 })();

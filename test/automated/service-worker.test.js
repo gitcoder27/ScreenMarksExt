@@ -44,6 +44,11 @@ function loadWorker(seedEntries, options) {
   const openTabs = (options && options.tabs) || [];
   // The latest badge text set per tab id.
   const badges = {};
+  // Offscreen document creates/closes, runtime broadcasts and tab messages.
+  const offscreenLog = [];
+  const runtimeMessages = [];
+  const tabMessages = [];
+  let offscreenOpen = Boolean(options && options.offscreenOpen);
 
   const context = vm.createContext({ console, crypto, setImmediate, setTimeout, clearTimeout, URL });
   context.importScripts = (...files) => {
@@ -56,11 +61,26 @@ function loadWorker(seedEntries, options) {
     runtime: {
       lastError: null,
       getURL: (relative) => `chrome-extension://scenemarks/${relative}`,
+      getContexts: async () => (offscreenOpen ? [{ contextType: "OFFSCREEN_DOCUMENT" }] : []),
+      sendMessage: async (message) => {
+        runtimeMessages.push(message);
+      },
       onInstalled: event("onInstalled"),
       onStartup: event("onStartup"),
       onMessage: event("onMessage")
     },
     commands: { onCommand: event("onCommand") },
+    offscreen: {
+      createDocument: async ({ url }) => {
+        offscreenLog.push(["create", url]);
+        offscreenOpen = true;
+      },
+      closeDocument: async () => {
+        offscreenLog.push(["close"]);
+        offscreenOpen = false;
+      }
+    },
+    scripting: { insertCSS: async () => {}, executeScript: async () => {} },
     action: {
       setBadgeText: async ({ tabId, text }) => {
         badges[tabId] = text;
@@ -75,6 +95,11 @@ function loadWorker(seedEntries, options) {
       },
       update: async (id, options) => ({ id, ...options }),
       remove: async () => {},
+      sendMessage: (tabId, message, callback) => {
+        tabMessages.push({ tabId, message });
+        const reply = options && options.tabReply ? options.tabReply(tabId, message) : { ok: true };
+        setImmediate(() => callback(reply));
+      },
       onUpdated: event("tabs.onUpdated")
     },
     storage: {
@@ -93,7 +118,7 @@ function loadWorker(seedEntries, options) {
 
   const file = path.join(WORKER_DIR, "service-worker.js");
   vm.runInContext(fs.readFileSync(file, "utf8"), context, { filename: file });
-  return { badges, context, listeners, openedTabs, store, session };
+  return { badges, context, listeners, openedTabs, store, session, offscreenLog, runtimeMessages, tabMessages };
 }
 
 function settle() {
@@ -202,7 +227,7 @@ test("the worker's RPC whitelist matches the storage client's mutation methods",
   const { context } = loadWorker({});
   const whitelist = vm.runInContext("Array.from(STORAGE_RPC_METHODS).sort()", context);
   const clientMethods = vm.runInContext(
-    "Object.keys(SceneMarks.Storage.createClient()).filter((name) => !['getState', 'getScenesForVideo', 'getSettings'].includes(name)).sort()",
+    "Object.keys(SceneMarks.Storage.createClient()).filter((name) => !['getState', 'getScenesForVideo', 'getSettings', 'getVoiceProfile'].includes(name)).sort()",
     context
   );
 
@@ -395,17 +420,125 @@ test("only the offscreen voice document may read the voice config", async () => 
   const fromEngine = await sendToWorker(listeners, { type }, {
     url: "chrome-extension://scenemarks/src/voice/offscreen.html"
   });
-  assert.deepEqual(
-    { ...fromEngine },
-    { ok: true, micDeviceId: "mic-1", micLabel: "MacBook Pro Microphone" }
-  );
+  assert.equal(fromEngine.ok, true);
+  assert.equal(fromEngine.voice.micDeviceId, "mic-1");
+  assert.equal(fromEngine.voice.micLabel, "MacBook Pro Microphone");
+  assert.deepEqual({ ...fromEngine.profile.commands }, {});
+  assert.equal("hotkeys" in fromEngine.voice, false);
 });
 
-test("voice listening can only be started from SceneMarks pages", async () => {
+const ENGINE_SENDER = { url: "chrome-extension://scenemarks/src/voice/offscreen.html" };
+const VIDEO_TAB = { id: 7, url: "https://www.youtube.com/watch?v=abcdEFGH123", active: true, windowId: 1, index: 0 };
+
+function settingsChange(listeners, oldVoice, newVoice) {
+  listeners["storage.onChanged"].forEach((listener) => listener({
+    settings: { oldValue: { voice: oldVoice }, newValue: { voice: newVoice } }
+  }, "local"));
+}
+
+test("voice commands are accepted only from the offscreen engine, and only while voice is on", async () => {
+  const work = loadWorker({ settings: { voice: { enabled: true } } }, { tabs: [VIDEO_TAB] });
+  await settle();
+  const type = "SCENEMARKS_VOICE_COMMAND";
+
+  for (const sender of [
+    { url: "https://www.youtube.com/watch?v=x", tab: { id: 7 }, frameId: 0 },
+    { url: "chrome-extension://scenemarks/src/options/options.html" },
+    { url: "chrome-extension://scenemarks/src/popup/popup.html" }
+  ]) {
+    const response = await sendToWorker(work.listeners, { type, payload: { command: "next" } }, sender);
+    assert.equal(response.ok, false);
+  }
+  assert.equal(work.tabMessages.length, 0);
+
+  assert.equal((await sendToWorker(work.listeners, { type, payload: { command: "dance" } }, ENGINE_SENDER)).ok, false);
+
+  const ran = await sendToWorker(work.listeners, { type, payload: { command: "next" } }, ENGINE_SENDER);
+  assert.equal(ran.ok, true);
+  assert.equal(work.tabMessages.length, 2); // PING, then the action.
+  assert.deepEqual({ ...work.tabMessages[1].message.payload }, { action: "next", heard: "next" });
+  assert.equal(work.tabMessages[1].message.type, "SCENEMARKS_VOICE_ACTION");
+  assert.equal(work.tabMessages[1].tabId, 7);
+
+  // Turned off (a stale engine may still speak): nothing runs.
+  await work.context.SceneMarks.Storage.updateSettings({ voice: { enabled: false } });
+  const off = await sendToWorker(work.listeners, { type, payload: { command: "pause" } }, ENGINE_SENDER);
+  assert.equal(off.ok, false);
+  assert.equal(work.tabMessages.length, 2);
+});
+
+test("voice page actions are refused when the active tab is not a web page", async () => {
+  const work = loadWorker({ settings: { voice: { enabled: true } } }, {
+    tabs: [{ id: 3, url: "chrome://extensions/", active: true, windowId: 1, index: 0 }]
+  });
+  await settle();
+  const response = await sendToWorker(work.listeners, {
+    type: "SCENEMARKS_VOICE_COMMAND", payload: { command: "play" }
+  }, ENGINE_SENDER);
+  assert.equal(response.ok, false);
+  assert.equal(work.tabMessages.length, 0);
+});
+
+test("turning voice on or off opens or closes the offscreen document", async () => {
+  const work = loadWorker({}, { tabs: [] });
+  await settle();
+  assert.deepEqual(work.offscreenLog, []); // Off by default: no microphone.
+
+  settingsChange(work.listeners, { enabled: false }, { enabled: true });
+  await settle();
+  assert.deepEqual(work.offscreenLog, [["create", "src/voice/offscreen.html"]]);
+
+  // Other voice settings reload the engine instead.
+  settingsChange(work.listeners, { enabled: true, sensitivity: 0.5 }, { enabled: true, sensitivity: 0.8 });
+  await settle();
+  assert.deepEqual(work.runtimeMessages.map((message) => message.type), ["SCENEMARKS_VOICE_CONFIG_CHANGED"]);
+
+  settingsChange(work.listeners, { enabled: true }, { enabled: false });
+  await settle();
+  assert.deepEqual(work.offscreenLog.at(-1), ["close"]);
+});
+
+test("a new extension load reopens the voice document when voice is on", async () => {
+  const work = loadWorker({ schemaVersion: 3, settings: { voice: { enabled: true } } }, { tabs: [] });
+  await settle();
+  assert.deepEqual(work.offscreenLog, [["create", "src/voice/offscreen.html"]]);
+
+  // A later wake in the same load (document still open) does nothing.
+  const again = loadWorker(null, { store: work.store, session: work.session, offscreenOpen: true, tabs: [] });
+  await settle();
+  assert.deepEqual(again.offscreenLog, []);
+});
+
+test("new voice templates make the engine reload", async () => {
+  const work = loadWorker({ settings: { voice: { enabled: true } } }, { tabs: [], offscreenOpen: true });
+  await settle();
+  work.listeners["storage.onChanged"].forEach((listener) => listener({ voiceProfile: { newValue: {} } }, "local"));
+  await settle();
+  assert.deepEqual(work.runtimeMessages.map((message) => message.type), ["SCENEMARKS_VOICE_CONFIG_CHANGED"]);
+});
+
+test("the toggle-voice shortcut flips voice and announces it on the page", async () => {
+  const work = loadWorker({}, { tabs: [VIDEO_TAB] });
+  await settle();
+  work.listeners.onCommand.forEach((listener) => listener("toggle-voice"));
+  await settle();
+  assert.equal(work.store.raw("settings").voice.enabled, true);
+  const announce = work.tabMessages.find(({ message }) => message.type === "SCENEMARKS_VOICE_ACTION");
+  assert.equal(announce.message.payload.action, "announce");
+  assert.match(announce.message.payload.message, /Record your words/);
+
+  work.listeners.onCommand.forEach((listener) => listener("toggle-voice"));
+  await settle();
+  assert.equal(work.store.raw("settings").voice.enabled, false);
+});
+
+test("voice template RPCs are for extension pages only", async () => {
   const { listeners } = loadWorker({});
   await settle();
-  const response = await sendToWorker(listeners, { type: "SCENEMARKS_VOICE_SPIKE_START" }, {
-    url: "https://www.youtube.com/watch?v=x", tab: { id: 2 }, frameId: 0
-  });
-  assert.equal(response.ok, false);
+  for (const method of ["saveVoiceSamples", "clearVoiceProfile"]) {
+    const response = await sendToWorker(listeners, {
+      type: "SCENEMARKS_STORAGE_RPC", payload: { method, args: ["next", []] }
+    }, { url: "https://www.netflix.com/watch/1", tab: { id: 4 }, frameId: 0 });
+    assert.equal(response.ok, false, method);
+  }
 });

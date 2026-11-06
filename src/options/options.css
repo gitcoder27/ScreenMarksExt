@@ -261,24 +261,37 @@ select {
   }
 }
 
-.voice-spike-buttons {
+h3 {
+  color: #e2e8f0;
+  font-size: 13px;
+  margin: 0;
+}
+
+.voice-step {
+  border-top: 1px solid #334155;
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.voice-row {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
 .voice-meter {
-  background: #1e293b;
+  background: #0f172a;
   border-radius: 4px;
-  height: 10px;
-  margin-top: 12px;
+  height: 8px;
   overflow: hidden;
 }
 
 .voice-meter__fill {
   background: #22c55e;
   height: 100%;
-  transition: width 120ms linear;
+  transition: width 100ms linear;
   width: 0;
 }
 
@@ -286,12 +299,96 @@ select {
   background: #facc15;
 }
 
-.voice-spike-status {
+.voice-train-status,
+.voice-test-result {
+  color: #e2e8f0;
+  font-size: 14px;
+  font-weight: 700;
+  min-height: 20px;
+}
+
+.voice-train-status.is-error,
+.voice-test-result.is-error {
+  color: #fca5a5;
+}
+
+.voice-word-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.voice-word {
+  align-items: center;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  display: grid;
+  gap: 4px 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 8px 8px 8px 12px;
+}
+
+.voice-word.is-recording {
+  border-color: #facc15;
+}
+
+.voice-word__name {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.voice-word__detail {
+  color: #94a3b8;
+  font-size: 12px;
+  grid-column: 1;
+}
+
+.voice-word__detail.is-good {
+  color: #86efac;
+}
+
+.voice-word__detail.is-warning {
+  color: #fcd34d;
+}
+
+.voice-word__actions {
+  display: flex;
+  gap: 6px;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.voice-word__actions button {
+  padding: 6px 10px;
+}
+
+.voice-diagnostics summary {
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.voice-diagnostics__status {
   background: #020617;
   border-radius: 6px;
   font-size: 12px;
   line-height: 1.5;
-  margin: 12px 0 0;
+  margin: 10px 0;
   padding: 10px;
   white-space: pre-wrap;
+}
+
+@media (max-width: 560px) {
+  .voice-word {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-word__actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
 }

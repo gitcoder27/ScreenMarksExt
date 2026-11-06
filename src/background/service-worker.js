@@ -24,8 +24,12 @@ importScripts(
 // restarts. install/update and browser start alone are not enough: enabling
 // a disabled unpacked extension fires neither, so a library still in the old
 // layout would stay invisible. An import forces a run.
+//
+// The same once-per-load pass brings back the voice document: offscreen
+// documents close on exactly the events that clear this flag.
 const MIGRATIONS_CHECKED_FLAG = "migrationsChecked";
 let migrationRun = null;
+let voiceDocumentWork = Promise.resolve();
 
 async function runMigrationsOncePerLoad() {
   const session = chrome.storage.session;
@@ -37,6 +41,8 @@ async function runMigrationsOncePerLoad() {
   }
 
   await SceneMarks.Migrations.runAll();
+  const settings = await SceneMarks.Storage.getSettings();
+  await syncVoiceDocument(settings.voice.enabled);
   if (session) {
     await session.set({ [MIGRATIONS_CHECKED_FLAG]: true });
   }
@@ -103,12 +109,17 @@ const STORAGE_RPC_METHODS = new Set([
   "importState",
   "clearAllData",
   "toggleFloatingButton",
-  "setSiteEnabled"
+  "setSiteEnabled",
+  "saveVoiceSamples",
+  "clearVoiceProfile"
 ]);
 
 // Library replacement/deletion and global jump cancellation belong to
 // extension pages. Content scripts may complete only their own queued jump.
-const EXTENSION_PAGE_ONLY_RPC_METHODS = new Set(["importState", "clearAllData", "clearPendingJump"]);
+// Voice templates are recorded only on the options page.
+const EXTENSION_PAGE_ONLY_RPC_METHODS = new Set([
+  "importState", "clearAllData", "clearPendingJump", "saveVoiceSamples", "clearVoiceProfile"
+]);
 
 // sender.url is set by the browser, so a page (or a compromised renderer)
 // cannot claim an extension-page URL. Extension pages opened in a tab
@@ -509,8 +520,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  const change = changes[SceneMarks.Constants.STORAGE_KEYS.SETTINGS];
-  if (areaName !== "local" || !change) {
+  if (areaName !== "local") {
+    return;
+  }
+  const { STORAGE_KEYS } = SceneMarks.Constants;
+  // New or cleared voice templates: the engine reloads them.
+  if (changes[STORAGE_KEYS.VOICE_PROFILE]) {
+    notifyVoiceConfigChanged().catch(() => {});
+  }
+
+  const change = changes[STORAGE_KEYS.SETTINGS];
+  if (!change) {
     return;
   }
 
@@ -520,8 +540,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     || previous.disabledSites.join(" ") !== badgeSettings.disabledSites.join(" ")) {
     refreshAllBadges();
   }
-  if (previous.voice.micDeviceId !== badgeSettings.voice.micDeviceId
-    || previous.voice.micLabel !== badgeSettings.voice.micLabel) {
+  // Turning voice on or off opens or closes the microphone document; any
+  // other voice setting (mic, sensitivity) is reloaded by the engine.
+  if (previous.voice.enabled !== badgeSettings.voice.enabled) {
+    syncVoiceDocument(badgeSettings.voice.enabled);
+  } else if (JSON.stringify(previous.voice) !== JSON.stringify(badgeSettings.voice)) {
     notifyVoiceConfigChanged().catch(() => {});
   }
 });
@@ -529,6 +552,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 chrome.commands.onCommand.addListener((command) => {
   if (command === "open-library") {
     openLibrary();
+    return;
+  }
+
+  if (command === "toggle-voice") {
+    toggleVoiceFromShortcut().catch((error) => console.warn("SceneMarks voice toggle failed:", error));
     return;
   }
 
@@ -542,9 +570,13 @@ chrome.commands.onCommand.addListener((command) => {
   });
 });
 
-// Voice (Phase 0 spike): the microphone lives in an offscreen document, so
-// the permission belongs to the extension origin, not to the video site.
+// ---------------------------------------------------------------------
+// Voice commands. The microphone lives in an offscreen document
+// (src/voice/), so the permission belongs to the extension origin, not to
+// the video site, and the prompt never appears on Netflix or YouTube. The
+// document exists exactly while settings.voice.enabled is on.
 const VOICE_OFFSCREEN_PATH = "src/voice/offscreen.html";
+const PAGE_VOICE_ACTIONS = new Set(["next", "back", "pause", "play", "mark"]);
 
 async function hasVoiceDocument() {
   if (!chrome.runtime.getContexts) {
@@ -557,19 +589,34 @@ async function hasVoiceDocument() {
   return contexts.length > 0;
 }
 
-async function startVoiceDocument() {
-  if (!chrome.offscreen) {
-    return { ok: false, error: "This browser has no chrome.offscreen API." };
+async function openVoiceDocument() {
+  if (!chrome.offscreen || await hasVoiceDocument()) {
+    return;
   }
-  if (await hasVoiceDocument()) {
-    return { ok: true, alreadyRunning: true };
+  try {
+    await chrome.offscreen.createDocument({
+      url: VOICE_OFFSCREEN_PATH,
+      reasons: ["USER_MEDIA"],
+      justification: "Listen for the user's spoken SceneMarks commands."
+    });
+  } catch (error) {
+    // A racing create already made it.
+    if (!/single offscreen/i.test(String(error && error.message))) throw error;
   }
-  await chrome.offscreen.createDocument({
-    url: VOICE_OFFSCREEN_PATH,
-    reasons: ["USER_MEDIA"],
-    justification: "Listen for the user's spoken SceneMarks commands."
-  });
-  return { ok: true };
+}
+
+async function closeVoiceDocument() {
+  if (chrome.offscreen && await hasVoiceDocument()) {
+    await chrome.offscreen.closeDocument();
+  }
+}
+
+// Creates and closes are serialized so a quick on/off/on cannot race.
+function syncVoiceDocument(enabled) {
+  voiceDocumentWork = voiceDocumentWork
+    .then(() => (enabled ? openVoiceDocument() : closeVoiceDocument()))
+    .catch((error) => console.warn("SceneMarks voice document sync failed:", error));
+  return voiceDocumentWork;
 }
 
 function isVoiceDocumentSender(sender) {
@@ -578,8 +625,11 @@ function isVoiceDocumentSender(sender) {
 
 // Only what the engine needs, never the rest of settings.
 async function getVoiceConfig() {
-  const { voice } = await SceneMarks.Storage.getSettings();
-  return { ok: true, micDeviceId: voice.micDeviceId, micLabel: voice.micLabel };
+  const [settings, profile] = await Promise.all([
+    SceneMarks.Storage.getSettings(),
+    SceneMarks.Storage.getVoiceProfile()
+  ]);
+  return { ok: true, voice: settings.voice, profile };
 }
 
 async function notifyVoiceConfigChanged() {
@@ -589,11 +639,67 @@ async function notifyVoiceConfigChanged() {
   }
 }
 
-async function stopVoiceDocument() {
-  if (chrome.offscreen && await hasVoiceDocument()) {
-    await chrome.offscreen.closeDocument();
+// The tab the user is looking at: the active tab of the last focused
+// window (the popup is not open while speaking, so this is the video).
+async function getVoiceTargetTab() {
+  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return tabs[0] || null;
+}
+
+function isWebPageUrl(url) {
+  return /^https?:/i.test(url || "") || String(url || "").startsWith("file://");
+}
+
+async function sendVoiceAction(tab, payload) {
+  if (!tab || !Number.isSafeInteger(tab.id) || !isWebPageUrl(tab.url)) {
+    return { ok: false, error: "No video page is active." };
   }
-  return { ok: true };
+  try {
+    if (!(await ensureContentScript(tab.id))) {
+      return { ok: false, error: "SceneMarks could not start on this page." };
+    }
+    return await sendTabMessage(tab.id, { type: SceneMarks.Constants.MESSAGE_TYPES.VOICE_ACTION, payload });
+  } catch (error) {
+    return { ok: false, error: error.message || "SceneMarks could not run on this page." };
+  }
+}
+
+// Short fixed feedback on the active page, e.g. after the shortcut.
+async function announceOnActiveTab(message) {
+  const tab = await getVoiceTargetTab();
+  if (tab && isWebPageUrl(tab.url)) {
+    await sendVoiceAction(tab, { action: "announce", message }).catch(() => {});
+  }
+}
+
+async function handleVoiceCommand(payload) {
+  const command = payload && payload.command;
+  const known = SceneMarks.Constants.VOICE_COMMANDS.some(({ id }) => id === command);
+  if (!known) {
+    return { ok: false, error: "Unknown voice command." };
+  }
+  // A document left over from a quick off/on must not act once voice is off.
+  const settings = await SceneMarks.Storage.getSettings();
+  if (!settings.voice.enabled) {
+    return { ok: false, error: "Voice commands are off." };
+  }
+
+  if (PAGE_VOICE_ACTIONS.has(command)) {
+    return sendVoiceAction(await getVoiceTargetTab(), { action: command, heard: command });
+  }
+  return { ok: false, error: `"${command}" is not available yet.` };
+}
+
+async function toggleVoiceFromShortcut() {
+  const enabled = await SceneMarks.Storage.toggleVoiceEnabled();
+  if (!enabled) {
+    await announceOnActiveTab("Voice commands off");
+    return;
+  }
+  const profile = await SceneMarks.Storage.getVoiceProfile();
+  await announceOnActiveTab(Object.keys(profile.commands).length
+    ? "Voice commands on"
+    : "Voice commands on. Record your words in Settings first.");
 }
 
 async function handleStorageRpc(payload, sender) {
@@ -690,16 +796,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return respondWith(getVoiceConfig(), sendResponse);
   }
 
-  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_SPIKE_START
-    || message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_SPIKE_STOP) {
-    if (!isExtensionPageSender(sender)) {
-      sendResponse({ ok: false, error: "Only SceneMarks pages may control voice listening." });
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_COMMAND) {
+    if (!isVoiceDocumentSender(sender)) {
+      sendResponse({ ok: false, error: "Only the SceneMarks voice engine may send voice commands." });
       return false;
     }
-    const run = message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_SPIKE_START
-      ? startVoiceDocument()
-      : stopVoiceDocument();
-    return respondWith(run, sendResponse);
+    return respondWith(handleVoiceCommand(message.payload), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.STORAGE_RPC) {

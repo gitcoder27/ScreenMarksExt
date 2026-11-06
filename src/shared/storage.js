@@ -23,6 +23,7 @@
     normalizeState,
     normalizeTags,
     normalizeVideo,
+    normalizeVoiceProfile,
     sanitizeText,
     sortScenes
   } = SceneMarks.Schema;
@@ -675,6 +676,21 @@
     return { ok: true, settings: state.settings };
   }
 
+  // The toggle-voice shortcut. Decided inside updateState for the same
+  // reason as toggleFloatingButton. Worker-internal: the popup sets an
+  // explicit value through updateSettings.
+  async function toggleVoiceEnabled() {
+    const state = await updateState((draftState) => {
+      draftState.settings = normalizeSettings({
+        ...draftState.settings,
+        voice: { ...draftState.settings.voice, enabled: !draftState.settings.voice.enabled }
+      });
+      return draftState;
+    }, SHARED_ONLY);
+
+    return state.settings.voice.enabled;
+  }
+
   // Switching a site off adds `site` (the popup passes its displayed
   // hostname) unless an entry already covers it.
   // Switching it on removes every entry covering `site`, so turning
@@ -819,6 +835,75 @@
     return { ok: deleted };
   }
 
+  // Voice templates live in their own key outside the state model, so state
+  // reads and writes (and so export and a replacing import) never touch
+  // them. Clear All Data removes them with everything else.
+  async function getVoiceProfile() {
+    const raw = await chromeGet([STORAGE_KEYS.VOICE_PROFILE]);
+    return normalizeVoiceProfile(raw[STORAGE_KEYS.VOICE_PROFILE]);
+  }
+
+  function knownVoiceCommand(command) {
+    return SceneMarks.Constants.VOICE_COMMANDS.some(({ id }) => id === command);
+  }
+
+  // Replaces one command's samples. A profile recorded with another feature
+  // version cannot be mixed with new samples, so it is dropped.
+  async function saveVoiceSamples(command, samples) {
+    if (!knownVoiceCommand(command)) {
+      return { ok: false, error: "Unknown voice command." };
+    }
+    const { VOICE_FEATURE_VERSION } = SceneMarks.Constants;
+    const incoming = normalizeVoiceProfile({
+      featureVersion: VOICE_FEATURE_VERSION,
+      commands: { [command]: samples }
+    }).commands[command];
+    if (!incoming) {
+      return { ok: false, error: "No usable voice samples." };
+    }
+
+    let saved = null;
+    await updateRawKeys(async (get) => {
+      const raw = await get([STORAGE_KEYS.VOICE_PROFILE]);
+      const current = normalizeVoiceProfile(raw[STORAGE_KEYS.VOICE_PROFILE]);
+      const commands = current.featureVersion === VOICE_FEATURE_VERSION ? current.commands : {};
+      saved = normalizeVoiceProfile({
+        featureVersion: VOICE_FEATURE_VERSION,
+        commands: { ...commands, [command]: incoming }
+      });
+      return { set: { [STORAGE_KEYS.VOICE_PROFILE]: saved } };
+    });
+
+    return { ok: true, sampleCount: incoming.length };
+  }
+
+  // Clears one command, or every command when command is null.
+  async function clearVoiceProfile(command) {
+    if (command !== null && command !== undefined && !knownVoiceCommand(command)) {
+      return { ok: false, error: "Unknown voice command." };
+    }
+
+    await updateRawKeys(async (get) => {
+      const raw = await get([STORAGE_KEYS.VOICE_PROFILE]);
+      if (raw[STORAGE_KEYS.VOICE_PROFILE] === undefined) {
+        return SKIP_WRITE;
+      }
+      if (command === null || command === undefined) {
+        return { remove: [STORAGE_KEYS.VOICE_PROFILE] };
+      }
+      const current = normalizeVoiceProfile(raw[STORAGE_KEYS.VOICE_PROFILE]);
+      if (!current.commands[command]) {
+        return SKIP_WRITE;
+      }
+      delete current.commands[command];
+      return Object.keys(current.commands).length
+        ? { set: { [STORAGE_KEYS.VOICE_PROFILE]: current } }
+        : { remove: [STORAGE_KEYS.VOICE_PROFILE] };
+    });
+
+    return { ok: true };
+  }
+
   // Every key in this extension's storage.local is SceneMarks data.
   async function clearAllData() {
     return enqueueWrite(async () => {
@@ -845,7 +930,9 @@
     "importState",
     "clearAllData",
     "toggleFloatingButton",
-    "setSiteEnabled"
+    "setSiteEnabled",
+    "saveVoiceSamples",
+    "clearVoiceProfile"
   ]);
 
   function sendStorageRpc(method, args) {
@@ -878,7 +965,8 @@
     const client = {
       getState,
       getScenesForVideo,
-      getSettings
+      getSettings,
+      getVoiceProfile
     };
 
     RPC_METHODS.forEach((method) => {
@@ -892,6 +980,7 @@
     SKIP_WRITE,
     clearAllData,
     clearPendingJump,
+    clearVoiceProfile,
     consumePendingJump,
     createClient,
     deleteScene,
@@ -900,15 +989,18 @@
     getScenesForVideo,
     getSettings,
     getState,
+    getVoiceProfile,
     importState,
     isVideoStorageKey,
     listVideoKeys,
     mergeVideo,
     saveScene,
+    saveVoiceSamples,
     setPendingJump,
     setSiteEnabled,
     startRange,
     toggleFloatingButton,
+    toggleVoiceEnabled,
     updateScene,
     updateVideo,
     updateRawKeys,

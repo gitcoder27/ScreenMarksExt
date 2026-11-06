@@ -671,3 +671,77 @@ test("pending-jump publication and consumption require a valid destination tab",
   assert.equal(store.writes, writes);
   assert.equal((await Storage.consumePendingJump(IDENTITY.videoKey, token, 1)).ok, true);
 });
+
+// ---- Voice templates --------------------------------------------------
+function voiceTemplate(frames, value = 0.5) {
+  return { frames, data: new Array(frames * SceneMarks.Constants.VOICE_MFCC_COEFFS).fill(value) };
+}
+
+test("saveVoiceSamples writes only the voiceProfile key and replaces that command", async () => {
+  const before = store.writeLog.length;
+  assert.equal((await Storage.saveVoiceSamples("next", [voiceTemplate(4), voiceTemplate(5), voiceTemplate(6)])).ok, true);
+  assert.equal((await Storage.saveVoiceSamples("back", [voiceTemplate(3)])).ok, true);
+  assert.equal((await Storage.saveVoiceSamples("next", [voiceTemplate(7)])).sampleCount, 1);
+  assert.deepEqual(store.writeLog.slice(before), [
+    { set: ["voiceProfile"], remove: [] },
+    { set: ["voiceProfile"], remove: [] },
+    { set: ["voiceProfile"], remove: [] }
+  ]);
+
+  const profile = await Storage.getVoiceProfile();
+  assert.deepEqual(Object.keys(profile.commands), ["next", "back"]);
+  assert.deepEqual(profile.commands.next.map((sample) => sample.frames), [7]);
+  assert.equal((await Storage.saveVoiceSamples("dance", [voiceTemplate(3)])).ok, false);
+  assert.equal((await Storage.saveVoiceSamples("next", [{ frames: 2, data: [1] }])).ok, false);
+});
+
+test("saveVoiceSamples drops templates recorded with another feature version", async () => {
+  store = installChromeStorageMock({
+    voiceProfile: { featureVersion: 0, commands: { back: [voiceTemplate(3)] } }
+  });
+  await Storage.saveVoiceSamples("next", [voiceTemplate(4)]);
+  const profile = await Storage.getVoiceProfile();
+  assert.equal(profile.featureVersion, SceneMarks.Constants.VOICE_FEATURE_VERSION);
+  assert.deepEqual(Object.keys(profile.commands), ["next"]);
+});
+
+test("clearVoiceProfile clears one command or the whole key, and skips no-op writes", async () => {
+  await Storage.saveVoiceSamples("next", [voiceTemplate(4)]);
+  await Storage.saveVoiceSamples("back", [voiceTemplate(4)]);
+  const before = store.writeLog.length;
+  await Storage.clearVoiceProfile("pause");
+  assert.equal(store.writeLog.length, before);
+  await Storage.clearVoiceProfile("next");
+  assert.deepEqual(Object.keys((await Storage.getVoiceProfile()).commands), ["back"]);
+  await Storage.clearVoiceProfile("back");
+  assert.equal(store.raw("voiceProfile"), undefined);
+  await Storage.saveVoiceSamples("next", [voiceTemplate(4)]);
+  await Storage.clearVoiceProfile(null);
+  assert.equal(store.raw("voiceProfile"), undefined);
+  const settled = store.writeLog.length;
+  await Storage.clearVoiceProfile(null);
+  assert.equal(store.writeLog.length, settled);
+  assert.equal((await Storage.clearVoiceProfile("dance")).ok, false);
+});
+
+test("voice templates stay out of state reads, export and a replacing import", async () => {
+  await Storage.saveScene(IDENTITY, { startSeconds: 12 });
+  await Storage.saveVoiceSamples("next", [voiceTemplate(4)]);
+  const state = await Storage.getState();
+  assert.equal("voiceProfile" in state, false);
+  assert.equal(JSON.stringify(SceneMarks.Schema.normalizeState(state)).includes("voiceProfile"), false);
+
+  await Storage.importState({ videos: {} }, { merge: false });
+  assert.deepEqual(Object.keys((await Storage.getState()).videos), []);
+  assert.deepEqual(Object.keys((await Storage.getVoiceProfile()).commands), ["next"]);
+});
+
+test("toggleVoiceEnabled flips voice inside the write queue and keeps the other voice fields", async () => {
+  await Storage.updateSettings({ voice: { micDeviceId: "mic-9", micLabel: "USB Mic" } });
+  const [first, second] = await Promise.all([Storage.toggleVoiceEnabled(), Storage.toggleVoiceEnabled()]);
+  assert.deepEqual([first, second], [true, false]);
+  assert.equal(await Storage.toggleVoiceEnabled(), true);
+  assert.deepEqual(store.readState().settings.voice, {
+    enabled: true, sensitivity: 0.5, micDeviceId: "mic-9", micLabel: "USB Mic"
+  });
+});

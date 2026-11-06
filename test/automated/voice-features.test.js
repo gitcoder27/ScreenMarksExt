@@ -172,3 +172,158 @@ test("a steady noise is cut off once, then words over it are still heard", () =>
   assert.equal(results.length, 2, String(results));
   assertWord(results[1], 400, 650);
 });
+
+// ---- MFCC, DTW and matching -------------------------------------------
+const { TAKES, synthWord } = require("./voice-synth");
+const COMMANDS = ["next", "back", "pause", "play", "mark", "skip", "return", "random"];
+
+function features(word, take = 0) {
+  return VoiceFeatures.extractFeatures(synthWord(word, TAKES[take]));
+}
+
+function trainedLibrary(words = COMMANDS) {
+  const commands = {};
+  for (const word of words) commands[word] = [0, 1, 2].map((take) => features(word, take));
+  const library = VoiceFeatures.prepareLibrary({ commands });
+  return { commands, library, calibration: VoiceFeatures.calibrate(library) };
+}
+
+test("feature sizes agree with the shared constants", () => {
+  const constantsFile = path.join(__dirname, "..", "..", "src", "shared", "constants.js");
+  const context = vm.createContext({});
+  context.globalThis = context;
+  vm.runInContext(fs.readFileSync(constantsFile, "utf8"), context);
+  const { VOICE_MFCC_COEFFS, MAX_VOICE_TEMPLATE_FRAMES } = context.SceneMarks.Constants;
+  assert.equal(VoiceFeatures.COEFFS, VOICE_MFCC_COEFFS);
+  assert.equal(VoiceFeatures.FEATURE_DIM, VOICE_MFCC_COEFFS * 2);
+  const long = VoiceFeatures.extractFeatures(new Float32Array(SR * 3).map((_, i) => 0.1 * Math.sin(i * 0.2) * (1 + Math.sin(i / 900))));
+  assert.ok(long.frames <= MAX_VOICE_TEMPLATE_FRAMES, String(long.frames));
+});
+
+test("MFCC extraction is deterministic, mean-normalized and trims edge silence", () => {
+  const a = features("next");
+  const b = features("next");
+  assert.deepEqual(a, b);
+  assert.equal(a.data.length, a.frames * VoiceFeatures.COEFFS);
+  assert.ok(a.data.every(Number.isFinite));
+  // Cepstral mean normalization: every coefficient averages ~0.
+  for (let k = 0; k < VoiceFeatures.COEFFS; k += 1) {
+    let sum = 0;
+    for (let f = 0; f < a.frames; f += 1) sum += a.data[f * VoiceFeatures.COEFFS + k];
+    assert.ok(Math.abs(sum / a.frames) < 0.02, `coefficient ${k}`);
+  }
+  // 360 ms of word inside 200 ms of padding: the padding is trimmed away.
+  assert.ok(a.frames >= 30 && a.frames <= 40, String(a.frames));
+  // Loudness is normalized away: a loud and a quiet take of a word are
+  // much closer than two different words.
+  const loud = VoiceFeatures.withDeltas(VoiceFeatures.extractFeatures(synthWord("next", { level: 2 })));
+  const quietCopy = VoiceFeatures.withDeltas(VoiceFeatures.extractFeatures(synthWord("next", { level: 0.5 })));
+  const otherWord = VoiceFeatures.withDeltas(features("back"));
+  assert.ok(VoiceFeatures.dtwDistance(loud, quietCopy) < VoiceFeatures.dtwDistance(loud, otherWord) / 2);
+});
+
+test("extractFeatures returns null for input too short to describe", () => {
+  assert.equal(VoiceFeatures.extractFeatures(new Float32Array(100)), null);
+  assert.equal(VoiceFeatures.extractFeatures(null), null);
+});
+
+test("DTW is zero for identical input and small for a time-stretched copy", () => {
+  const base = VoiceFeatures.withDeltas(features("random"));
+  assert.equal(VoiceFeatures.dtwDistance(base, base), 0);
+  const slow = VoiceFeatures.withDeltas(VoiceFeatures.extractFeatures(synthWord("random", { speed: 1.3 })));
+  const other = VoiceFeatures.withDeltas(features("skip"));
+  const stretched = VoiceFeatures.dtwDistance(base, slow);
+  assert.ok(stretched < VoiceFeatures.dtwDistance(base, other) / 2, `${stretched}`);
+  // Symmetric.
+  assert.ok(Math.abs(VoiceFeatures.dtwDistance(slow, base) - stretched) < 1e-9);
+});
+
+test("DTW never matches lengths that differ too much", () => {
+  const short = VoiceFeatures.withDeltas(features("play"));
+  const long = { frames: short.frames * 3, data: new Float64Array(short.frames * 3 * VoiceFeatures.FEATURE_DIM) };
+  assert.equal(VoiceFeatures.dtwDistance(short, long), Infinity);
+});
+
+test("new takes of every trained word are recognized", () => {
+  const { library, calibration } = trainedLibrary();
+  for (const word of COMMANDS) {
+    for (const take of [3, 4]) {
+      const result = VoiceFeatures.match(VoiceFeatures.withDeltas(features(word, take)), library, calibration, 0.5);
+      assert.equal(result.accepted, true, `${word} take ${take}: ${result.reason}`);
+      assert.equal(result.command, word);
+    }
+  }
+});
+
+test("words that are not commands are rejected", () => {
+  const { library, calibration } = trainedLibrary();
+  for (const word of ["hello", "stop"]) {
+    const result = VoiceFeatures.match(VoiceFeatures.withDeltas(features(word)), library, calibration, 0.5);
+    assert.equal(result.accepted, false, word);
+    assert.equal(result.reason, "too-far");
+  }
+});
+
+test("a match too close to a second command is rejected as ambiguous", () => {
+  const { library, calibration } = trainedLibrary(["next", "back"]);
+  // Train "back" a second time under another name: the two are the same word.
+  const twin = library.find(({ command }) => command === "back");
+  const confusable = [...library, { command: "mark", templates: twin.templates }];
+  const result = VoiceFeatures.match(VoiceFeatures.withDeltas(features("back", 3)), confusable, calibration, 0.5);
+  assert.equal(result.accepted, false);
+  assert.equal(result.reason, "ambiguous");
+});
+
+test("sensitivity loosens the threshold and margin", () => {
+  const calibration = { typicalDistance: 2 };
+  const strict = VoiceFeatures.decisionRule(calibration, 0);
+  const loose = VoiceFeatures.decisionRule(calibration, 1);
+  assert.ok(strict.threshold < loose.threshold);
+  assert.ok(strict.margin < loose.margin);
+  assert.deepEqual(VoiceFeatures.decisionRule(calibration, Number.NaN), VoiceFeatures.decisionRule(calibration, 0.5));
+});
+
+test("calibration needs two takes of a word; the profile check flags weak words", () => {
+  const single = VoiceFeatures.prepareLibrary({ commands: { next: [features("next")] } });
+  assert.equal(VoiceFeatures.calibrate(single), null);
+
+  const { library, calibration } = trainedLibrary(["next", "back", "skip"]);
+  assert.ok(calibration.typicalDistance > 0);
+  const report = VoiceFeatures.evaluateProfile(library, calibration, 0.5);
+  assert.deepEqual(Array.from(report, ({ command }) => command), ["next", "back", "skip"]);
+  report.forEach((entry) => assert.equal(entry.recognized, entry.total, entry.command));
+
+  // "mark" trained with takes of "back": both become unreliable.
+  const mixed = trainedLibrary(["next", "back"]);
+  mixed.library.push({ command: "mark", templates: [1, 3, 4].map((take) => VoiceFeatures.withDeltas(features("back", take))) });
+  const weak = VoiceFeatures.evaluateProfile(mixed.library, mixed.calibration, 0.5);
+  const mark = weak.find(({ command }) => command === "mark");
+  assert.ok(mark.recognized < mark.total);
+  assert.ok(mark.confusedWith.includes("back"));
+});
+
+test("a VAD utterance feeds straight into feature extraction", () => {
+  const vad = VoiceFeatures.createVad();
+  const audio = concat([quiet(1500), synthWord("return"), quiet(800)]);
+  let utterance = null;
+  for (let start = 0; start + FRAME <= audio.length; start += FRAME) {
+    const result = vad.push(audio.slice(start, start + FRAME));
+    if (result && result.frames) utterance = result;
+  }
+  assert.ok(utterance, "the VAD found the word");
+  const fromVad = VoiceFeatures.extractFeatures(VoiceFeatures.concatFrames(utterance.frames));
+  const { library, calibration } = trainedLibrary();
+  const result = VoiceFeatures.match(VoiceFeatures.withDeltas(fromVad), library, calibration, 0.5);
+  assert.equal(result.command, "return");
+  assert.equal(result.accepted, true);
+});
+
+test("every take of every command word passes the VAD, including sharp plosive onsets", () => {
+  for (const word of COMMANDS) {
+    for (const take of TAKES) {
+      const results = runVad(synthWord(word, take));
+      assert.equal(results.length, 1, `${word} ${JSON.stringify(take)}: ${results}`);
+      assert.equal(typeof results[0], "number", `${word} ${JSON.stringify(take)} rejected as ${results[0]}`);
+    }
+  }
+});

@@ -357,7 +357,8 @@
     const currentSettings = getSettingsSync();
     const note = payload && payload.note ? payload.note : "";
 
-    if (payload && payload.quick && currentSettings.quickSaveRequiresNote && !note.trim()) {
+    // Voice cannot type a note, so a spoken "mark" saves without one.
+    if (payload && payload.quick && !payload.fromVoice && currentSettings.quickSaveRequiresNote && !note.trim()) {
       return { ok: false, requiresNote: true, error: "Quick save requires a note in settings" };
     }
 
@@ -528,6 +529,78 @@
     return Storage.updateScene(payload.videoKey, payload.sceneId, payload.updates || {});
   }
 
+  // ---------------------------------------------------------------------
+  // Voice actions, sent by the worker when the offscreen engine recognizes
+  // a command. Like page hotkeys they act on the page by themselves, so
+  // they are refused where SceneMarks is off. Feedback goes to the page
+  // toast, which shows only fixed text, times and counts, never saved
+  // notes or titles.
+  const VOICE_LABELS = Object.freeze({
+    next: "next", back: "back", pause: "pause", play: "play", mark: "mark", skip: "skip", return: "return"
+  });
+
+  function voicePlayback(play) {
+    const video = detector.getActiveVideo();
+    if (!video) {
+      return Promise.resolve({ ok: false, error: "No video detected \u2014 start playback first" });
+    }
+    if (!play) {
+      video.pause();
+      return Promise.resolve({ ok: true, message: "Paused" });
+    }
+    return Promise.resolve(video.play()).then(
+      () => ({ ok: true, message: "Playing" }),
+      () => ({ ok: false, error: "The site blocked playback \u2014 press Space to play" })
+    );
+  }
+
+  async function voiceMark() {
+    const result = await saveTimestamp({ quick: true, fromVoice: true });
+    return result.ok && result.scene
+      ? { ok: true, message: `Saved ${formatSeconds(result.scene.startSeconds)}` }
+      : { ok: false, error: result.error || "Could not save." };
+  }
+
+  function showVoiceToast(heard, result) {
+    if (!overlay || !result) return;
+    const prefix = VOICE_LABELS[heard] ? `Voice: ${VOICE_LABELS[heard]} \u00b7 ` : "";
+    const text = result.ok ? result.message || "Done" : result.error;
+    overlay.showToast(`${prefix}${text}`, result.ok ? "success" : "error");
+  }
+
+  async function runVoiceAction(payload) {
+    if (!isActiveHere()) {
+      return INACTIVE_RESPONSE;
+    }
+    const action = payload && payload.action;
+    let result;
+    switch (action) {
+      case "next":
+        result = await jumpToNextScene();
+        break;
+      case "back":
+        result = await jumpToPreviousScene();
+        break;
+      case "pause":
+        result = await voicePlayback(false);
+        break;
+      case "play":
+        result = await voicePlayback(true);
+        break;
+      case "mark":
+        result = await voiceMark();
+        break;
+      case "announce":
+        result = { ok: true, message: String((payload && payload.message) || "").slice(0, 120) };
+        break;
+      default:
+        return { ok: false, error: "Unknown voice action." };
+    }
+    showVoiceToast(payload.heard, result);
+    // Only fixed text goes back: the engine shows it on extension pages.
+    return { ok: Boolean(result.ok), message: result.ok ? result.message : undefined, error: result.ok ? undefined : result.error };
+  }
+
   // Capture messages come from the popup and the browser-level shortcuts;
   // on an inactive site the shortcut still reaches the worker (the browser
   // owns those keys) but must not save anything.
@@ -565,6 +638,8 @@
         return deleteScene(message.payload || {});
       case MESSAGE_TYPES.UPDATE_SCENE:
         return updateScene(message.payload || {});
+      case MESSAGE_TYPES.VOICE_ACTION:
+        return runVoiceAction(message.payload || {});
       default:
         return { ok: false, error: "Unknown SceneMarks message." };
     }
