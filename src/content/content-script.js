@@ -561,6 +561,58 @@
       : { ok: false, error: result.error || "Could not save." };
   }
 
+  // "skip" / "return" land here on the tab just switched to. A tab opened
+  // in the background often has not built its player yet, so wait for the
+  // video (up to ~10 s), then play from the first saved timestamp.
+  const FIRST_MARK_POLL_MS = 250;
+  const FIRST_MARK_ATTEMPTS = 40;
+
+  function wait(ms) {
+    return new Promise((resolve) => root.setTimeout(resolve, ms));
+  }
+
+  function lineupLabel(payload) {
+    const position = Number(payload && payload.position);
+    const total = Number(payload && payload.total);
+    if (!Number.isSafeInteger(position) || !Number.isSafeInteger(total) || position < 1 || total < position) {
+      return "";
+    }
+    return `${payload.kind === "lineup" ? "Video" : "Tab"} ${position}/${total} \u00b7 `;
+  }
+
+  async function startAtFirstMark(payload) {
+    const label = lineupLabel(payload);
+    for (let attempt = 0; attempt < FIRST_MARK_ATTEMPTS && !getCurrentSnapshot().detected; attempt += 1) {
+      detector.scheduleScan();
+      await wait(FIRST_MARK_POLL_MS);
+    }
+    const detected = requireDetectedVideo();
+    if (!detected.ok) {
+      return { ok: false, error: `${label}${detected.error}` };
+    }
+
+    const { videoKey } = detected.snapshot;
+    const scenes = await Storage.getScenesForVideo(videoKey);
+    if (!scenes.length) {
+      const played = await voicePlayback(true);
+      return played.ok
+        ? { ok: true, message: `${label}No saved marks, playing` }
+        : { ok: false, error: `${label}${played.error}` };
+    }
+
+    const first = scenes[0];
+    const result = await seekTo({ seconds: first.startSeconds, behavior: "play-after-jump", expectedVideoKey: videoKey });
+    if (!result.ok) {
+      return { ok: false, error: `${label}${result.error}` };
+    }
+    const video = detector.getActiveVideo();
+    const blocked = Boolean(video && video.paused);
+    return {
+      ok: true,
+      message: `${label}${formatSeconds(first.startSeconds)} (1/${scenes.length})${blocked ? " \u00b7 press Space to play" : ""}`
+    };
+  }
+
   function showVoiceToast(heard, result) {
     if (!overlay || !result) return;
     const prefix = VOICE_LABELS[heard] ? `Voice: ${VOICE_LABELS[heard]} \u00b7 ` : "";
@@ -583,6 +635,8 @@
         break;
       case "pause":
         result = await voicePlayback(false);
+        // The worker pauses the tab it is leaving; nobody sees that toast.
+        if (payload.silent) return { ok: result.ok };
         break;
       case "play":
         result = await voicePlayback(true);
@@ -590,9 +644,15 @@
       case "mark":
         result = await voiceMark();
         break;
-      case "announce":
-        result = { ok: true, message: String((payload && payload.message) || "").slice(0, 120) };
+      case "startAtFirstMark":
+        result = await startAtFirstMark(payload);
         break;
+      case "announce": {
+        // Fixed text from the worker, never saved content.
+        const text = String((payload && payload.message) || "").slice(0, 120);
+        result = payload.isError ? { ok: false, error: text } : { ok: true, message: text };
+        break;
+      }
       default:
         return { ok: false, error: "Unknown voice action." };
     }

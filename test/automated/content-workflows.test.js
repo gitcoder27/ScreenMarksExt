@@ -274,3 +274,59 @@ test("unknown voice actions do nothing", async () => {
   assert.equal(result.ok, false);
   assert.equal(work.store.writes, 0);
 });
+
+test("startAtFirstMark waits for a late player, then plays from the first saved timestamp", async () => {
+  const video = fakeVideo();
+  const work = loadContent({ video, seed: seededScenes() });
+  await flush();
+  work.setSnapshot({ detected: false });
+  const pending = voice(work, "startAtFirstMark", { heard: "skip", position: 2, total: 3, kind: "lineup" });
+  await work.advance(250);
+  await work.advance(250);
+  assert.deepEqual(work.seeks, []);
+  work.setSnapshot({ detected: true });
+  await work.advance(250);
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(result.message, "Video 2/3 · 00:30 (1/2)");
+  assert.deepEqual(work.seeks.map(({ seconds, behavior }) => [seconds, behavior]), [[30, "play-after-jump"]]);
+  assert.match(pageText(work), /Voice: skip · Video 2\/3 · 00:30 \(1\/2\)/);
+  assert.doesNotMatch(pageText(work), /confidential|Secret title/);
+});
+
+test("startAtFirstMark just plays a video with no saved marks, and gives up after ~10 s", async () => {
+  const video = fakeVideo();
+  video.paused = true;
+  const work = loadContent({ video });
+  await flush();
+  const plain = await voice(work, "startAtFirstMark", { heard: "return", position: 1, total: 4, kind: "tabs" });
+  assert.equal(plain.message, "Tab 1/4 · No saved marks, playing");
+  assert.deepEqual(video.calls, ["play"]);
+
+  const empty = loadContent({ video: null });
+  await flush();
+  empty.setSnapshot({ detected: false });
+  const pending = voice(empty, "startAtFirstMark", { heard: "skip", position: 1, total: 2, kind: "lineup" });
+  for (let n = 0; n < 41; n += 1) await empty.advance(250);
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.match(result.error, /^Video 1\/2 · No video detected/);
+});
+
+test("the tab a switch leaves is paused without a toast", async () => {
+  const video = fakeVideo();
+  const work = loadContent({ video });
+  await flush();
+  const result = await work.send({ type: "SCENEMARKS_VOICE_ACTION", payload: { action: "pause", silent: true } });
+  assert.deepEqual({ ...result }, { ok: true });
+  assert.deepEqual(video.calls, ["pause"]);
+  assert.doesNotMatch(pageText(work), /Paused/);
+});
+
+test("worker announcements show as toasts, errors styled as errors", async () => {
+  const work = loadContent();
+  await flush();
+  const result = await voice(work, "announce", { heard: "skip", message: "No other video tab to switch to", isError: true });
+  assert.equal(result.ok, false);
+  assert.match(pageText(work), /Voice: skip · No other video tab to switch to/);
+});

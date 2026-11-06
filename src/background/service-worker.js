@@ -443,8 +443,18 @@ async function openRandomVideos(payload) {
   }
 
   const picked = sampleRandom(candidates, count);
+  const lineup = { windowId: null, tabIds: [] };
   for (const video of picked) {
-    await chrome.tabs.create({ url: video.canonicalUrl || video.rawUrls[0], active: false });
+    const tab = await chrome.tabs.create({ url: video.canonicalUrl || video.rawUrls[0], active: false });
+    if (tab && Number.isSafeInteger(tab.id)) {
+      lineup.tabIds.push(tab.id);
+      if (lineup.windowId === null && Number.isSafeInteger(tab.windowId)) lineup.windowId = tab.windowId;
+    }
+  }
+  // The batch becomes the voice lineup that "skip" and "return" move
+  // through. Each batch replaces the previous one.
+  if (lineup.tabIds.length) {
+    await saveVoiceLineup(lineup);
   }
 
   return {
@@ -672,6 +682,145 @@ async function announceOnActiveTab(message) {
   }
 }
 
+// ---- The lineup: "skip" and "return" --------------------------------
+// The tabs a batch Open Random opened, in order, kept in
+// chrome.storage.session: in memory, invisible to content scripts, and
+// nothing added to storage.local.
+const VOICE_LINEUP_KEY = "voiceLineup";
+const TAB_LOAD_TIMEOUT_MS = 10000;
+
+async function getVoiceLineup() {
+  const session = chrome.storage.session;
+  if (!session) return { windowId: null, tabIds: [] };
+  const stored = (await session.get(VOICE_LINEUP_KEY))[VOICE_LINEUP_KEY];
+  const tabIds = stored && Array.isArray(stored.tabIds) ? stored.tabIds.filter(Number.isSafeInteger) : [];
+  return { windowId: stored && Number.isSafeInteger(stored.windowId) ? stored.windowId : null, tabIds };
+}
+
+async function saveVoiceLineup(lineup) {
+  if (chrome.storage.session) {
+    await chrome.storage.session.set({ [VOICE_LINEUP_KEY]: lineup });
+  }
+}
+
+// Pure: where "skip" (direction 1) or "return" (-1) goes. The lineup wins
+// when it has open tabs: the tab after (before) the active one, wrapping,
+// or its first (last) tab when the active tab is not in it. Without a
+// lineup, the next (previous) web tab in the active window, wrapping.
+// Returns { tabId, position, total, kind } or null when there is nowhere
+// else to go.
+function pickVoiceSwitchTarget(direction, activeTabId, lineupTabIds, windowTabIds) {
+  const pick = (ids, kind) => {
+    const index = ids.indexOf(activeTabId);
+    if (!ids.length || (ids.length === 1 && index === 0)) return null;
+    const target = index === -1
+      ? (direction > 0 ? 0 : ids.length - 1)
+      : (index + direction + ids.length) % ids.length;
+    return { tabId: ids[target], position: target + 1, total: ids.length, kind };
+  };
+  return lineupTabIds.length ? pick(lineupTabIds, "lineup") : pick(windowTabIds, "tabs");
+}
+
+// Background tabs may still be loading (or be discarded and reload on
+// activation); the content script can only take the command once the
+// page has loaded.
+async function waitForTabLoad(tabId) {
+  const deadline = Date.now() + TAB_LOAD_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return false;
+    if (tab.status === "complete") return true;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return true;
+}
+
+async function announceVoiceError(tab, heard, message) {
+  if (tab && isWebPageUrl(tab.url)) {
+    await sendVoiceAction(tab, { action: "announce", heard, message, isError: true }).catch(() => {});
+  }
+  return { ok: false, error: message };
+}
+
+async function switchVideoTab(direction, heard) {
+  const current = await getVoiceTargetTab();
+  const allTabs = await chrome.tabs.query({});
+  const openIds = new Set(allTabs.map((tab) => tab.id));
+  const lineup = await getVoiceLineup();
+  const liveLineup = lineup.tabIds.filter((id) => openIds.has(id));
+  if (liveLineup.length !== lineup.tabIds.length) {
+    await saveVoiceLineup({ ...lineup, tabIds: liveLineup });
+  }
+  const windowTabs = current
+    ? allTabs.filter((tab) => tab.windowId === current.windowId && isWebPageUrl(tab.url))
+      .sort((a, b) => a.index - b.index).map((tab) => tab.id)
+    : [];
+
+  const target = pickVoiceSwitchTarget(direction, current ? current.id : null, liveLineup, windowTabs);
+  if (!target) {
+    return announceVoiceError(current, heard, liveLineup.length
+      ? "This is the only video in the lineup"
+      : "No other video tab to switch to");
+  }
+
+  // Leave the current video paused, not playing in the background.
+  if (current && isWebPageUrl(current.url)) {
+    await sendTabMessage(current.id, {
+      type: SceneMarks.Constants.MESSAGE_TYPES.VOICE_ACTION,
+      payload: { action: "pause", silent: true }
+    }).catch(() => {});
+  }
+
+  const targetTab = allTabs.find((tab) => tab.id === target.tabId);
+  await chrome.tabs.update(target.tabId, { active: true });
+  if (targetTab && current && targetTab.windowId !== current.windowId && chrome.windows) {
+    await chrome.windows.update(targetTab.windowId, { focused: true }).catch(() => {});
+  }
+  await waitForTabLoad(target.tabId);
+  const tab = await chrome.tabs.get(target.tabId).catch(() => targetTab);
+  return sendVoiceAction(tab, {
+    action: "startAtFirstMark",
+    heard,
+    position: target.position,
+    total: target.total,
+    kind: target.kind
+  });
+}
+
+// "random": a random saved video that is not open yet, opened at its first
+// saved timestamp through the same owned queued jump the Library uses.
+async function openRandomVideoAtFirstMark() {
+  const state = await SceneMarks.Storage.getState();
+  const openUrlKeys = await getOpenTabUrlKeys();
+  const candidates = Object.values(state.videos).filter((video) => {
+    const openableUrl = video.canonicalUrl || (Array.isArray(video.rawUrls) ? video.rawUrls[0] : null);
+    return Boolean(openableUrl) && video.scenes.length > 0 && !isOpenInTab(video, openUrlKeys);
+  });
+  if (!candidates.length) {
+    return announceVoiceError(await getVoiceTargetTab(), "random", Object.keys(state.videos).length
+      ? "Every saved video is already open"
+      : "The SceneMarks library is empty");
+  }
+
+  const video = pickRandom(candidates);
+  const first = video.scenes[0];
+  const result = await queueVideoAtScene({
+    url: video.canonicalUrl || video.rawUrls[0],
+    videoKey: video.videoKey,
+    sceneId: first.id,
+    seconds: first.startSeconds
+  });
+  if (!result.ok) {
+    return result;
+  }
+  // It joins the end of the lineup, so "return" comes back to it.
+  const lineup = await getVoiceLineup();
+  if (lineup.tabIds.length) {
+    await saveVoiceLineup({ ...lineup, tabIds: [...lineup.tabIds, result.tabId] });
+  }
+  return { ok: true, message: "Opening a random video at its first mark" };
+}
+
 async function handleVoiceCommand(payload) {
   const command = payload && payload.command;
   const known = SceneMarks.Constants.VOICE_COMMANDS.some(({ id }) => id === command);
@@ -687,7 +836,10 @@ async function handleVoiceCommand(payload) {
   if (PAGE_VOICE_ACTIONS.has(command)) {
     return sendVoiceAction(await getVoiceTargetTab(), { action: command, heard: command });
   }
-  return { ok: false, error: `"${command}" is not available yet.` };
+  if (command === "skip" || command === "return") {
+    return switchVideoTab(command === "skip" ? 1 : -1, command);
+  }
+  return openRandomVideoAtFirstMark();
 }
 
 async function toggleVoiceFromShortcut() {

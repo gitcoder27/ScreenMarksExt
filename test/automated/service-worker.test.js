@@ -48,6 +48,7 @@ function loadWorker(seedEntries, options) {
   const offscreenLog = [];
   const runtimeMessages = [];
   const tabMessages = [];
+  const updatedTabs = [];
   let offscreenOpen = Boolean(options && options.offscreenOpen);
 
   const context = vm.createContext({ console, crypto, setImmediate, setTimeout, clearTimeout, URL });
@@ -70,6 +71,7 @@ function loadWorker(seedEntries, options) {
       onMessage: event("onMessage")
     },
     commands: { onCommand: event("onCommand") },
+    windows: { update: async () => {} },
     offscreen: {
       createDocument: async ({ url }) => {
         offscreenLog.push(["create", url]);
@@ -87,13 +89,31 @@ function loadWorker(seedEntries, options) {
       },
       setBadgeBackgroundColor: async () => {}
     },
+    // Tabs without an `active` or `windowId` field match any filter on it,
+    // so the older tests' bare tab lists keep working.
     tabs: {
-      query: async () => openTabs,
+      query: async (filter = {}) => openTabs.filter((tab) =>
+        (filter.active === undefined || tab.active === undefined || tab.active === filter.active)
+        && (filter.windowId === undefined || tab.windowId === undefined || tab.windowId === filter.windowId)),
+      get: async (id) => {
+        const tab = openTabs.find((item) => item.id === id);
+        if (!tab) throw new Error(`No tab with id: ${id}.`);
+        return { status: "complete", ...tab };
+      },
       create: async (options) => {
         openedTabs.push(options);
-        return { id: 1000 + openedTabs.length, ...options };
+        return { id: 1000 + openedTabs.length, windowId: 1, ...options };
       },
-      update: async (id, options) => ({ id, ...options }),
+      update: async (id, options) => {
+        updatedTabs.push({ id, ...options });
+        const tab = openTabs.find((item) => item.id === id);
+        if (tab && options.active) {
+          openTabs.forEach((item) => {
+            if (item.windowId === tab.windowId) item.active = item === tab;
+          });
+        }
+        return { id, ...options };
+      },
       remove: async () => {},
       sendMessage: (tabId, message, callback) => {
         tabMessages.push({ tabId, message });
@@ -118,7 +138,7 @@ function loadWorker(seedEntries, options) {
 
   const file = path.join(WORKER_DIR, "service-worker.js");
   vm.runInContext(fs.readFileSync(file, "utf8"), context, { filename: file });
-  return { badges, context, listeners, openedTabs, store, session, offscreenLog, runtimeMessages, tabMessages };
+  return { badges, context, listeners, openedTabs, store, session, offscreenLog, runtimeMessages, tabMessages, updatedTabs };
 }
 
 function settle() {
@@ -541,4 +561,161 @@ test("voice template RPCs are for extension pages only", async () => {
     }, { url: "https://www.netflix.com/watch/1", tab: { id: 4 }, frameId: 0 });
     assert.equal(response.ok, false, method);
   }
+});
+
+// ---- Lineup: skip / return / random -------------------------------------
+function pickTarget(work, ...args) {
+  work.context.__args = args;
+  const result = vm.runInContext("pickVoiceSwitchTarget(...__args)", work.context);
+  return result && { ...result };
+}
+
+test("the lineup pick wraps both ways and starts at the ends from outside it", () => {
+  const work = loadWorker({});
+  const lineup = [11, 12, 13];
+  assert.deepEqual(pickTarget(work, 1, 11, lineup, []), { tabId: 12, position: 2, total: 3, kind: "lineup" });
+  assert.deepEqual(pickTarget(work, 1, 13, lineup, []), { tabId: 11, position: 1, total: 3, kind: "lineup" });
+  assert.deepEqual(pickTarget(work, -1, 11, lineup, []), { tabId: 13, position: 3, total: 3, kind: "lineup" });
+  // Active tab outside the lineup: skip goes to the first, return to the last.
+  assert.deepEqual(pickTarget(work, 1, 99, lineup, [99, 98]), { tabId: 11, position: 1, total: 3, kind: "lineup" });
+  assert.deepEqual(pickTarget(work, -1, 99, lineup, [99, 98]), { tabId: 13, position: 3, total: 3, kind: "lineup" });
+  // Only the active tab is left: nowhere to go.
+  assert.equal(pickTarget(work, 1, 11, [11], [11, 5]), null);
+  // No lineup: the adjacent web tab in the window, wrapping.
+  assert.deepEqual(pickTarget(work, 1, 6, [], [5, 6, 7]), { tabId: 7, position: 3, total: 3, kind: "tabs" });
+  assert.deepEqual(pickTarget(work, 1, 7, [], [5, 6, 7]), { tabId: 5, position: 1, total: 3, kind: "tabs" });
+  assert.deepEqual(pickTarget(work, -1, 5, [], [5, 6, 7]), { tabId: 7, position: 3, total: 3, kind: "tabs" });
+  assert.equal(pickTarget(work, 1, 5, [], [5]), null);
+});
+
+function videoEntry(id, scenes = [{ id: `${id}-a`, startSeconds: 83 }, { id: `${id}-b`, startSeconds: 140 }]) {
+  return {
+    videoKey: `youtube:${id}`, platform: "youtube", title: id,
+    canonicalUrl: `https://www.youtube.com/watch?v=${id}`, rawUrls: [],
+    createdAt: "2025-01-01T00:00:00.000Z", updatedAt: "2025-01-01T00:00:00.000Z",
+    scenes: scenes.map((scene) => ({ createdAt: "2025-01-01T00:00:00.000Z", ...scene }))
+  };
+}
+
+test("a batch Open Random becomes the voice lineup, in opening order", async () => {
+  const videos = Object.fromEntries(["vidAAAAAAA1", "vidBBBBBBB2", "vidCCCCCCC3"].map((id) => [id, videoEntry(id)]));
+  const work = loadWorker(videoEntries(videos), { tabs: [] });
+  await settle();
+  const response = await sendToWorker(work.listeners, {
+    type: "SCENEMARKS_OPEN_RANDOM_VIDEOS", payload: { count: 3 }
+  }, { url: "chrome-extension://scenemarks/src/library/library.html" });
+  assert.equal(response.openedCount, 3);
+  assert.deepEqual(work.openedTabs.map((tab) => tab.active), [false, false, false]);
+  assert.deepEqual(JSON.parse(JSON.stringify(work.session.voiceLineup)), { windowId: 1, tabIds: [1001, 1002, 1003] });
+});
+
+function lineupBrowser({ activeId = 21, lineup = [21, 22, 23], extraTabs = [] } = {}) {
+  const tabs = [
+    { id: 21, windowId: 1, index: 0, url: "https://www.youtube.com/watch?v=vidAAAAAAA1" },
+    { id: 22, windowId: 1, index: 1, url: "https://www.youtube.com/watch?v=vidBBBBBBB2" },
+    { id: 23, windowId: 1, index: 2, url: "https://www.youtube.com/watch?v=vidCCCCCCC3" },
+    ...extraTabs
+  ].map((tab) => ({ ...tab, active: tab.id === activeId }));
+  const work = loadWorker({ settings: { voice: { enabled: true } } }, { tabs });
+  work.session.voiceLineup = { windowId: 1, tabIds: lineup };
+  return { work, tabs };
+}
+
+function voiceActions(work) {
+  return work.tabMessages.filter(({ message }) => message.type === "SCENEMARKS_VOICE_ACTION")
+    .map(({ tabId, message }) => ({ tabId, ...message.payload }));
+}
+
+test("skip pauses the current video, activates the next lineup tab and starts it at its first mark", async () => {
+  const { work } = lineupBrowser();
+  await settle();
+  const response = await sendToWorker(work.listeners, {
+    type: "SCENEMARKS_VOICE_COMMAND", payload: { command: "skip" }
+  }, ENGINE_SENDER);
+  assert.equal(response.ok, true);
+  assert.deepEqual(work.updatedTabs, [{ id: 22, active: true }]);
+  assert.deepEqual(voiceActions(work), [
+    { tabId: 21, action: "pause", silent: true },
+    { tabId: 22, action: "startAtFirstMark", heard: "skip", position: 2, total: 3, kind: "lineup" }
+  ]);
+
+  // "return" from there goes back to the first video.
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_VOICE_COMMAND", payload: { command: "return" } }, ENGINE_SENDER);
+  assert.deepEqual(work.updatedTabs.at(-1), { id: 21, active: true });
+  assert.equal(voiceActions(work).at(-1).position, 1);
+});
+
+test("skip leaves out closed lineup tabs and forgets them", async () => {
+  // Tab 22 was closed.
+  const { work } = lineupBrowser({ lineup: [21, 22, 23] });
+  work.context.chrome.tabs.query = async () => [
+    { id: 21, windowId: 1, index: 0, active: true, url: "https://www.youtube.com/watch?v=vidAAAAAAA1" },
+    { id: 23, windowId: 1, index: 1, active: false, url: "https://www.youtube.com/watch?v=vidCCCCCCC3" }
+  ];
+  await settle();
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_VOICE_COMMAND", payload: { command: "skip" } }, ENGINE_SENDER);
+  assert.deepEqual(work.updatedTabs, [{ id: 23, active: true }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(work.session.voiceLineup.tabIds)), [21, 23]);
+  assert.deepEqual(voiceActions(work).at(-1), {
+    tabId: 23, action: "startAtFirstMark", heard: "skip", position: 2, total: 2, kind: "lineup"
+  });
+});
+
+test("without a lineup, skip moves to the next web tab in the window", async () => {
+  const { work } = lineupBrowser({
+    activeId: 23, lineup: [],
+    extraTabs: [{ id: 24, windowId: 1, index: 3, url: "chrome://settings/" }]
+  });
+  await settle();
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_VOICE_COMMAND", payload: { command: "skip" } }, ENGINE_SENDER);
+  // chrome://settings is skipped and the order wraps.
+  assert.deepEqual(work.updatedTabs, [{ id: 21, active: true }]);
+  assert.equal(voiceActions(work).at(-1).kind, "tabs");
+});
+
+test("skip with nowhere to go says so on the current page and switches nothing", async () => {
+  const { work } = lineupBrowser({ activeId: 21, lineup: [21] });
+  await settle();
+  const response = await sendToWorker(work.listeners, {
+    type: "SCENEMARKS_VOICE_COMMAND", payload: { command: "skip" }
+  }, ENGINE_SENDER);
+  assert.equal(response.ok, false);
+  assert.match(response.error, /only video in the lineup/);
+  assert.deepEqual(work.updatedTabs, []);
+  const announce = voiceActions(work).at(-1);
+  assert.equal(announce.action, "announce");
+  assert.equal(announce.isError, true);
+});
+
+test("random opens an unopened saved video through an owned jump to its first mark", async () => {
+  const videos = { vidAAAAAAA1: videoEntry("vidAAAAAAA1"), vidBBBBBBB2: videoEntry("vidBBBBBBB2") };
+  const tabs = [{ id: 21, windowId: 1, index: 0, active: true, url: "https://www.youtube.com/watch?v=vidAAAAAAA1" }];
+  const work = loadWorker({ ...videoEntries(videos), settings: { voice: { enabled: true } } }, { tabs });
+  work.session.voiceLineup = { windowId: 1, tabIds: [21] };
+  await settle();
+  const response = await sendToWorker(work.listeners, {
+    type: "SCENEMARKS_VOICE_COMMAND", payload: { command: "random" }
+  }, ENGINE_SENDER);
+  assert.equal(response.ok, true);
+  // vidAAAAAAA1 is already open, so B is the only candidate.
+  const jump = work.store.raw("pendingJump");
+  assert.equal(jump.videoKey, "youtube:vidBBBBBBB2");
+  assert.equal(jump.seconds, 83);
+  assert.equal(jump.sceneId, "vidBBBBBBB2-a");
+  assert.equal(jump.targetTabId, 1001);
+  assert.deepEqual(work.updatedTabs, [{ id: 1001, url: "https://www.youtube.com/watch?v=vidBBBBBBB2" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(work.session.voiceLineup.tabIds)), [21, 1001]);
+});
+
+test("random with every saved video open reports it", async () => {
+  const videos = { vidAAAAAAA1: videoEntry("vidAAAAAAA1") };
+  const tabs = [{ id: 21, windowId: 1, index: 0, active: true, url: "https://www.youtube.com/watch?v=vidAAAAAAA1" }];
+  const work = loadWorker({ ...videoEntries(videos), settings: { voice: { enabled: true } } }, { tabs });
+  await settle();
+  const response = await sendToWorker(work.listeners, {
+    type: "SCENEMARKS_VOICE_COMMAND", payload: { command: "random" }
+  }, ENGINE_SENDER);
+  assert.equal(response.ok, false);
+  assert.match(response.error, /already open/);
+  assert.equal(work.openedTabs.length, 0);
 });
