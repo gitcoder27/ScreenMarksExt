@@ -47,6 +47,15 @@
     defaultJumpBehavior: "preserve-play-state",
     quickSaveRequiresNote: false,
     duplicateThresholdSeconds: 3,
+    // Voice commands. micDeviceId "" follows the system default input
+    // (macOS switches it to plugged-in headphones); otherwise it pins one
+    // mic, with micLabel kept to find it again if its ID changes.
+    voice: Object.freeze({
+      enabled: false,
+      sensitivity: 0.5,
+      micDeviceId: "",
+      micLabel: ""
+    }),
     hotkeys: Object.freeze({
       quickSave: "Alt+Shift+S",
       toggleRange: "Alt+Shift+M",
@@ -80,8 +89,23 @@
     PICK_RANDOM_VIDEO: "SCENEMARKS_PICK_RANDOM_VIDEO",
     GET_ACTIVE_TAB_CONTEXT: "SCENEMARKS_GET_ACTIVE_TAB_CONTEXT",
     FORWARD_TO_ACTIVE_TAB: "SCENEMARKS_FORWARD_TO_ACTIVE_TAB",
-    STORAGE_RPC: "SCENEMARKS_STORAGE_RPC"
+    STORAGE_RPC: "SCENEMARKS_STORAGE_RPC",
+    // Phase 0 spike: an extension page asks the worker to open or close the
+    // offscreen microphone document.
+    VOICE_SPIKE_START: "SCENEMARKS_VOICE_SPIKE_START",
+    VOICE_SPIKE_STOP: "SCENEMARKS_VOICE_SPIKE_STOP",
+    // Offscreen document -> worker: read the voice settings (the offscreen
+    // document has no chrome.storage).
+    VOICE_GET_CONFIG: "SCENEMARKS_VOICE_GET_CONFIG",
+    // Worker -> offscreen document: voice settings changed, read them again.
+    VOICE_CONFIG_CHANGED: "SCENEMARKS_VOICE_CONFIG_CHANGED"
   });
+  const MAX_VOICE_MIC_FIELD_LENGTH = 300;
+
+  // The offscreen voice engine reports status to open extension pages on
+  // this BroadcastChannel (same extension origin) instead of
+  // runtime.sendMessage, so its periodic status never wakes the worker.
+  const VOICE_STATUS_CHANNEL = "scenemarks-voice-status";
 
   SceneMarks.Constants = {
     ARMED_DELETE_TIMEOUT_MS,
@@ -93,12 +117,14 @@
     MAX_RAW_URLS,
     MAX_TAG_LENGTH,
     MAX_TAGS,
+    MAX_VOICE_MIC_FIELD_LENGTH,
     MESSAGE_TYPES,
     PENDING_JUMP_TTL_MS,
     RANGE_DRAFT_TTL_MS,
     SCHEMA_VERSION,
     STORAGE_KEYS,
-    VIDEO_KEY_PREFIX
+    VIDEO_KEY_PREFIX,
+    VOICE_STATUS_CHANNEL
   };
 
   root.SceneMarks = SceneMarks;

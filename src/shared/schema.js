@@ -170,6 +170,21 @@
     return sites;
   }
 
+  function normalizeVoiceSettings(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const defaults = DEFAULT_SETTINGS.voice;
+    const sensitivity = Number(source.sensitivity);
+    const cap = SceneMarks.Constants.MAX_VOICE_MIC_FIELD_LENGTH;
+    return {
+      enabled: source.enabled === true,
+      sensitivity: Number.isFinite(sensitivity)
+        ? Math.min(1, Math.max(0, sensitivity))
+        : defaults.sensitivity,
+      micDeviceId: sanitizeText(source.micDeviceId, cap),
+      micLabel: sanitizeText(source.micLabel, cap)
+    };
+  }
+
   function normalizeSettings(value) {
     const source = value && typeof value === "object" ? value : {};
     const duplicateThresholdSeconds = Number(source.duplicateThresholdSeconds);
@@ -189,6 +204,7 @@
         Number.isFinite(duplicateThresholdSeconds) && duplicateThresholdSeconds >= 0
           ? Math.min(duplicateThresholdSeconds, 600)
           : DEFAULT_SETTINGS.duplicateThresholdSeconds,
+      voice: normalizeVoiceSettings(source.voice),
       hotkeys: normalizeHotkeys(source.hotkeys)
     };
   }
@@ -380,6 +396,7 @@
     normalizePendingJump,
     normalizeScene,
     normalizeSettings,
+    normalizeVoiceSettings,
     normalizeSiteDomain,
     normalizeState,
     normalizeTags,

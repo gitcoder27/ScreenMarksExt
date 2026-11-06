@@ -240,3 +240,21 @@ test("pending-jump normalization preserves owned requests and safely reads legac
     assert.equal(Schema.normalizePendingJump(legacy).requestId, legacy.requestId);
   }
 });
+
+test("normalizeSettings fills voice defaults and caps its fields", () => {
+  const defaults = Schema.normalizeSettings({});
+  assert.deepEqual(defaults.voice, { enabled: false, sensitivity: 0.5, micDeviceId: "", micLabel: "" });
+
+  const cap = SceneMarks.Constants.MAX_VOICE_MIC_FIELD_LENGTH;
+  const voice = Schema.normalizeSettings({
+    voice: { enabled: "yes", sensitivity: 7, micDeviceId: "x".repeat(cap + 50), micLabel: 42, extra: "dropped" }
+  }).voice;
+  assert.equal(voice.enabled, false);
+  assert.equal(voice.sensitivity, 1);
+  assert.equal(voice.micDeviceId.length, cap);
+  assert.equal(voice.micLabel, "42");
+  assert.equal("extra" in voice, false);
+
+  assert.equal(Schema.normalizeSettings({ voice: { sensitivity: "abc" } }).voice.sensitivity, 0.5);
+  assert.equal(Schema.normalizeSettings({ voice: "on" }).voice.enabled, false);
+});

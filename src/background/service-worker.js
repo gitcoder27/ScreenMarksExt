@@ -520,6 +520,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     || previous.disabledSites.join(" ") !== badgeSettings.disabledSites.join(" ")) {
     refreshAllBadges();
   }
+  if (previous.voice.micDeviceId !== badgeSettings.voice.micDeviceId
+    || previous.voice.micLabel !== badgeSettings.voice.micLabel) {
+    notifyVoiceConfigChanged().catch(() => {});
+  }
 });
 
 chrome.commands.onCommand.addListener((command) => {
@@ -537,6 +541,60 @@ chrome.commands.onCommand.addListener((command) => {
     payload: { quick: true, source: "browser-command" }
   });
 });
+
+// Voice (Phase 0 spike): the microphone lives in an offscreen document, so
+// the permission belongs to the extension origin, not to the video site.
+const VOICE_OFFSCREEN_PATH = "src/voice/offscreen.html";
+
+async function hasVoiceDocument() {
+  if (!chrome.runtime.getContexts) {
+    return false;
+  }
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"],
+    documentUrls: [chrome.runtime.getURL(VOICE_OFFSCREEN_PATH)]
+  });
+  return contexts.length > 0;
+}
+
+async function startVoiceDocument() {
+  if (!chrome.offscreen) {
+    return { ok: false, error: "This browser has no chrome.offscreen API." };
+  }
+  if (await hasVoiceDocument()) {
+    return { ok: true, alreadyRunning: true };
+  }
+  await chrome.offscreen.createDocument({
+    url: VOICE_OFFSCREEN_PATH,
+    reasons: ["USER_MEDIA"],
+    justification: "Listen for the user's spoken SceneMarks commands."
+  });
+  return { ok: true };
+}
+
+function isVoiceDocumentSender(sender) {
+  return Boolean(sender && sender.url === chrome.runtime.getURL(VOICE_OFFSCREEN_PATH));
+}
+
+// Only what the engine needs, never the rest of settings.
+async function getVoiceConfig() {
+  const { voice } = await SceneMarks.Storage.getSettings();
+  return { ok: true, micDeviceId: voice.micDeviceId, micLabel: voice.micLabel };
+}
+
+async function notifyVoiceConfigChanged() {
+  if (await hasVoiceDocument()) {
+    chrome.runtime.sendMessage({ type: SceneMarks.Constants.MESSAGE_TYPES.VOICE_CONFIG_CHANGED })
+      .catch(() => {});
+  }
+}
+
+async function stopVoiceDocument() {
+  if (chrome.offscreen && await hasVoiceDocument()) {
+    await chrome.offscreen.closeDocument();
+  }
+  return { ok: true };
+}
 
 async function handleStorageRpc(payload, sender) {
   const method = payload && typeof payload.method === "string" ? payload.method : null;
@@ -622,6 +680,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     return respondWith(forwardToActiveTab(message.payload), sendResponse);
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_GET_CONFIG) {
+    if (!isVoiceDocumentSender(sender)) {
+      sendResponse({ ok: false, error: "Only the SceneMarks voice engine may read its config." });
+      return false;
+    }
+    return respondWith(getVoiceConfig(), sendResponse);
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_SPIKE_START
+    || message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_SPIKE_STOP) {
+    if (!isExtensionPageSender(sender)) {
+      sendResponse({ ok: false, error: "Only SceneMarks pages may control voice listening." });
+      return false;
+    }
+    const run = message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_SPIKE_START
+      ? startVoiceDocument()
+      : stopVoiceDocument();
+    return respondWith(run, sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.STORAGE_RPC) {

@@ -139,6 +139,28 @@
           <button id="openBrowserShortcutsButton" class="secondary-button" type="button">Open Browser Shortcut Settings</button>
         </section>
 
+        <section class="settings-section">
+          <h2>Voice (Phase 0 spike)</h2>
+          <p class="hint">Temporary test panel. Grant the microphone here once; the hidden background listener then uses the same permission.</p>
+          <div class="voice-spike-buttons">
+            <button id="voiceGrantButton" class="secondary-button" type="button">1. Grant Microphone</button>
+            <button id="voiceStartButton" class="secondary-button" type="button">2. Start Background Listening</button>
+            <button id="voiceStopButton" class="secondary-button" type="button">Stop</button>
+          </div>
+          <label>
+            Microphone
+            <select id="voiceMicSelect"></select>
+          </label>
+          <p id="voiceMicHint" class="hint"></p>
+          <div class="voice-meter" aria-hidden="true"><div id="voiceMeterFill" class="voice-meter__fill"></div></div>
+          <pre id="voiceSpikeStatus" class="voice-spike-status">No status yet.</pre>
+          <div class="voice-spike-buttons">
+            <button id="voiceResetButton" class="secondary-button" type="button">Reset Counters</button>
+            <button id="voiceCopyButton" type="button">Copy Report</button>
+            <span id="voiceCopyResult" class="hint" role="status"></span>
+          </div>
+        </section>
+
         <section class="settings-section danger-section">
           <h2>Data</h2>
           <p class="hint">Data stays in this browser profile's chrome.storage.local. Export from the library before clearing data.</p>
@@ -164,5 +186,6 @@
     <script src="../shared/schema.js"></script>
     <script src="../shared/storage.js"></script>
     <script src="options.js"></script>
+    <script src="voice-spike.js"></script>
   </body>
 </html>

@@ -365,3 +365,47 @@ test("v2 generic saves still upgrade when a dedicated platform adapter becomes a
   await work.context.SceneMarks.Migrations.runAll();
   assert.equal(work.store.writes, writes);
 });
+
+function sendToWorker(listeners, message, sender) {
+  return new Promise((resolve) => {
+    const handled = listeners.onMessage[0](message, sender, resolve);
+    if (!handled) {
+      setImmediate(() => resolve(undefined));
+    }
+  });
+}
+
+test("only the offscreen voice document may read the voice config", async () => {
+  const { listeners } = loadWorker({
+    settings: { voice: { micDeviceId: "mic-1", micLabel: "MacBook Pro Microphone" } }
+  });
+  await settle();
+  const type = "SCENEMARKS_VOICE_GET_CONFIG";
+
+  const fromPage = await sendToWorker(listeners, { type }, {
+    url: "https://www.netflix.com/watch/1", tab: { id: 4 }, frameId: 0
+  });
+  assert.equal(fromPage.ok, false);
+
+  const fromOptions = await sendToWorker(listeners, { type }, {
+    url: "chrome-extension://scenemarks/src/options/options.html"
+  });
+  assert.equal(fromOptions.ok, false);
+
+  const fromEngine = await sendToWorker(listeners, { type }, {
+    url: "chrome-extension://scenemarks/src/voice/offscreen.html"
+  });
+  assert.deepEqual(
+    { ...fromEngine },
+    { ok: true, micDeviceId: "mic-1", micLabel: "MacBook Pro Microphone" }
+  );
+});
+
+test("voice listening can only be started from SceneMarks pages", async () => {
+  const { listeners } = loadWorker({});
+  await settle();
+  const response = await sendToWorker(listeners, { type: "SCENEMARKS_VOICE_SPIKE_START" }, {
+    url: "https://www.youtube.com/watch?v=x", tab: { id: 2 }, frameId: 0
+  });
+  assert.equal(response.ok, false);
+});

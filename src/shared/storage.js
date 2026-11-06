@@ -638,6 +638,10 @@
       nextSettings = normalizeSettings({
         ...draftState.settings,
         ...updates,
+        voice: {
+          ...draftState.settings.voice,
+          ...(updates && updates.voice ? updates.voice : {})
+        },
         hotkeys: {
           ...draftState.settings.hotkeys,
           ...(updates && updates.hotkeys ? updates.hotkeys : {})

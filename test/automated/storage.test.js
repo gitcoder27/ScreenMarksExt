@@ -321,6 +321,16 @@ test("updateSettings persists merged settings", async () => {
   assert.equal(settings.hotkeys.quickSave, SceneMarks.Constants.DEFAULT_SETTINGS.hotkeys.quickSave);
 });
 
+test("updateSettings merges voice fields without dropping the others", async () => {
+  await Storage.updateSettings({ voice: { enabled: true, sensitivity: 0.8 } });
+  const settings = await Storage.updateSettings({ voice: { micDeviceId: "abc", micLabel: "MacBook Pro Microphone" } });
+
+  assert.deepEqual(settings.voice, {
+    enabled: true, sensitivity: 0.8, micDeviceId: "abc", micLabel: "MacBook Pro Microphone"
+  });
+  assert.deepEqual(store.readState().settings.voice, settings.voice);
+});
+
 test("overlapping updateState calls serialize so both writes survive", async () => {
   await Promise.all([
     Storage.updateState(async (state) => {

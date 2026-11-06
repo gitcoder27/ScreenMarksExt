@@ -260,3 +260,38 @@ select {
     grid-template-columns: 1fr;
   }
 }
+
+.voice-spike-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.voice-meter {
+  background: #1e293b;
+  border-radius: 4px;
+  height: 10px;
+  margin-top: 12px;
+  overflow: hidden;
+}
+
+.voice-meter__fill {
+  background: #22c55e;
+  height: 100%;
+  transition: width 120ms linear;
+  width: 0;
+}
+
+.voice-meter__fill.is-speaking {
+  background: #facc15;
+}
+
+.voice-spike-status {
+  background: #020617;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 12px 0 0;
+  padding: 10px;
+  white-space: pre-wrap;
+}
