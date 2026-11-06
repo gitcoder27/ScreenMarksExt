@@ -582,13 +582,16 @@
     return state.videos[videoKey] ? state.videos[videoKey].scenes : [];
   }
 
+  // Internal worker operation: only the worker can allocate a destination tab.
+  // Deliberately absent from RPC_METHODS; clients open through the worker.
   async function setPendingJump(value) {
     const pendingJump = normalizePendingJump({
       ...value,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      requestId: SceneMarks.Ids.createId("jump")
     });
 
-    if (!pendingJump) {
+    if (!pendingJump || pendingJump.targetTabId === null) {
       return { ok: false, error: "Invalid jump target." };
     }
 
@@ -600,32 +603,25 @@
     return { ok: true, pendingJump };
   }
 
-  async function consumePendingJump(videoKey) {
-    // Read first: most calls have nothing to consume, and an unconditional
-    // write would broadcast a pointless storage.onChanged event that loops
-    // back into overlay refreshes (visible as overlay flicker).
-    const state = await readState([]);
-    if (!state.pendingJump || state.pendingJump.videoKey !== videoKey) {
-      return { ok: false };
-    }
-
+  async function consumePendingJump(videoKey, expectedRequestId, targetTabId) {
     let pendingJump = null;
-    await updateState((draftState) => {
-      if (!draftState.pendingJump || draftState.pendingJump.videoKey !== videoKey) {
+    await updateState((state) => {
+      const current = state.pendingJump;
+      if (!expectedRequestId || !current || current.videoKey !== videoKey
+        || current.requestId !== expectedRequestId || current.targetTabId === null
+        || current.targetTabId !== targetTabId) {
         return SKIP_WRITE;
       }
-
-      pendingJump = draftState.pendingJump;
-      draftState.pendingJump = null;
-      return draftState;
+      pendingJump = current;
+      state.pendingJump = null;
+      return state;
     }, SHARED_ONLY);
-
     return pendingJump ? { ok: true, pendingJump } : { ok: false };
   }
 
-  async function clearPendingJump() {
+  async function clearPendingJump(expectedRequestId) {
     await updateState((state) => {
-      if (!state.pendingJump) {
+      if (!state.pendingJump || (expectedRequestId && state.pendingJump.requestId !== expectedRequestId)) {
         return SKIP_WRITE;
       }
 
@@ -675,8 +671,8 @@
     return { ok: true, settings: state.settings };
   }
 
-  // Switching a site off adds `site` (the popup passes the page's main
-  // domain, so subdomains are covered) unless an entry already covers it.
+  // Switching a site off adds `site` (the popup passes its displayed
+  // hostname) unless an entry already covers it.
   // Switching it on removes every entry covering `site`, so turning
   // m.youtube.com back on also lifts a youtube.com entry. Decided inside
   // updateState for the same reason as toggleFloatingButton.
@@ -716,31 +712,34 @@
     return error ? { ok: false, error } : { ok: true, site: domain, settings: state.settings };
   }
 
-  function mergeVideo(existing, incoming) {
-    if (!existing) {
-      return incoming;
-    }
-
-    const seen = new Set(existing.scenes.map((scene) => scene.id));
-    const mergedScenes = [...existing.scenes];
-
+  // Preserve incompatible annotations, even when their imported IDs match.
+  // Compatible means exact endpoints and note; tags union and favorite OR.
+  function mergeVideo(existing, incoming, report) {
+    if (!existing) return incoming;
+    const mergedScenes = existing.scenes.map((scene) => ({ ...scene }));
     for (const scene of incoming.scenes) {
-      if (seen.has(scene.id)) {
-        continue;
-      }
-
-      const duplicate = findDuplicateScene({ scenes: mergedScenes }, scene, 0.5);
-      if (!duplicate || duplicate.note !== scene.note) {
-        mergedScenes.push(scene);
+      const sameId = mergedScenes.find((item) => item.id === scene.id);
+      const compatible = mergedScenes.find((item) => item.startSeconds === scene.startSeconds
+        && item.endSeconds === scene.endSeconds && item.note === scene.note
+        && normalizeTags([...item.tags, ...scene.tags]).length
+          === new Set([...item.tags, ...scene.tags].map((tag) => tag.toLowerCase())).size);
+      if (compatible) {
+        compatible.tags = normalizeTags([...compatible.tags, ...scene.tags]);
+        compatible.favorite = compatible.favorite || scene.favorite;
+        compatible.updatedAt = [compatible.updatedAt, scene.updatedAt].sort().at(-1);
+        if (report) report.mergedScenes += 1;
+      } else {
+        mergedScenes.push({ ...scene, id: sameId ? SceneMarks.Ids.createId("scene") : scene.id });
+        if (sameId && report) report.conflictingScenes += 1;
       }
     }
-
     return {
       ...existing,
       title: incoming.title || existing.title,
       canonicalUrl: incoming.canonicalUrl || existing.canonicalUrl,
       rawUrls: Array.from(new Set([...existing.rawUrls, ...incoming.rawUrls])),
       favorite: existing.favorite || incoming.favorite,
+      identityRepairRequired: existing.identityRepairRequired || incoming.identityRepairRequired,
       updatedAt: new Date().toISOString(),
       scenes: sortScenes(mergedScenes)
     };
@@ -753,6 +752,17 @@
     const importedState = normalizeState(importedValue);
     const importedVideos = Object.values(importedState.videos);
     const replace = opts.merge === false;
+    const report = { mergedScenes: 0, conflictingScenes: 0, repairedScenes: 0, rejectedScenes: 0 };
+    for (const video of Object.values((importedValue && importedValue.videos) || {})) {
+      const ids = new Set();
+      for (const scene of (video && Array.isArray(video.scenes) ? video.scenes : [])) {
+        if (!normalizeScene(scene)) { report.rejectedScenes += 1; continue; }
+        if (ids.has(scene.id) || (scene.endSeconds != null && Number(scene.endSeconds) < Number(scene.startSeconds))) {
+          report.repairedScenes += 1;
+        }
+        ids.add(scene.id);
+      }
+    }
 
     // A merge reads and writes only the imported videos. A replace has to
     // see every stored video to remove the ones the import lacks.
@@ -766,7 +776,7 @@
       }
 
       for (const video of importedVideos) {
-        state.videos[video.videoKey] = mergeVideo(state.videos[video.videoKey], video);
+        state.videos[video.videoKey] = mergeVideo(state.videos[video.videoKey], video, report);
       }
 
       if (opts.includeSettings === true) {
@@ -776,7 +786,7 @@
       return state;
     }, replace ? undefined : { videoKeys: importedVideos.map((video) => video.videoKey) });
 
-    return { ok: true, videoCount: importedVideos.length };
+    return { ok: true, videoCount: importedVideos.length, ...report };
   }
 
   async function deleteVideo(videoKey) {
@@ -825,7 +835,6 @@
     "updateScene",
     "updateVideo",
     "updateSettings",
-    "setPendingJump",
     "consumePendingJump",
     "clearPendingJump",
     "deleteVideo",
@@ -890,6 +899,7 @@
     importState,
     isVideoStorageKey,
     listVideoKeys,
+    mergeVideo,
     saveScene,
     setPendingJump,
     setSiteEnabled,

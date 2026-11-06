@@ -11,9 +11,7 @@
     "fbclid",
     "gclid",
     "msclkid",
-    "ref",
-    "ref_",
-    "tag"
+    "dclid"
   ]);
 
   function cleanTitle(documentRef) {
@@ -34,9 +32,11 @@
 
   function canonicalizeUrl(url, includeSafeQuery) {
     const canonical = new URL(url.href);
-    canonical.hash = "";
+    // Fragments may be SPA routes or content IDs; preserve them verbatim.
+    // Only explicitly known tracking parameters are safe to discard.
 
     if (!includeSafeQuery) {
+      canonical.hash = "";
       canonical.search = "";
       return canonical.toString();
     }
@@ -47,6 +47,7 @@
       }
     }
 
+    canonical.searchParams.sort();
     return canonical.toString();
   }
 
@@ -56,10 +57,10 @@
       return true;
     },
     getVideoKey(url) {
-      return `generic:${url.origin}:${normalizePath(url.pathname)}`;
+      return `generic:v2:${canonicalizeUrl(url, true)}`;
     },
     getCanonicalUrl(url) {
-      return canonicalizeUrl(url, false);
+      return canonicalizeUrl(url, true);
     },
     getTitle(documentRef) {
       return cleanTitle(documentRef);

@@ -27,7 +27,7 @@
   function createDefaultState() {
     return {
       schemaVersion: SCHEMA_VERSION,
-      videos: {},
+      videos: Object.create(null),
       settings: clone(DEFAULT_SETTINGS),
       activeRangeDraft: null,
       pendingJump: null
@@ -44,8 +44,8 @@
   // anything but a web or file URL (javascript:, data:, chrome:, ... from a
   // crafted import) is dropped.
   function sanitizeUrl(value) {
-    const text = sanitizeText(value, 2048);
-    if (!text) {
+    const text = String(value || "").trim();
+    if (!text || text.length > 2048) {
       return "";
     }
 
@@ -102,8 +102,8 @@
   }
 
   // A site entry is a bare lowercase hostname. Pasted URLs, ports and a
-  // leading "www." or "*." are dropped, so "https://www.YouTube.com/watch"
-  // becomes "youtube.com"; anything that is not a hostname yields "".
+  // leading "*." are dropped. Keep every hostname label, including "www":
+  // on a hosted suffix even that label may identify an independent tenant.
   function normalizeSiteDomain(value) {
     const text = sanitizeText(value, 300).toLowerCase();
     if (!text) {
@@ -117,7 +117,7 @@
       return "";
     }
 
-    hostname = hostname.replace(/\.$/, "").replace(/^www\./, "");
+    hostname = hostname.replace(/\.$/, "");
     // The URL parser reads numbers as IPv4 ("7" becomes "0.0.0.7"), so an
     // address only counts when it was typed out.
     if (/^\d+(\.\d+){3}$/.test(hostname) && !text.includes(hostname)) {
@@ -127,26 +127,10 @@
     return hostname.length <= 253 && /^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(hostname) ? hostname : "";
   }
 
-  // Second-level labels under a two-letter country TLD that act as public
-  // suffixes (amazon.co.uk, hotstar.com.au). Without the full Public Suffix
-  // List this keeps the common cases right; an entry can still be edited by
-  // hand on the options page.
-  const COUNTRY_SECOND_LEVEL_LABELS = new Set(["ac", "co", "com", "edu", "gov", "ne", "net", "or", "org"]);
-
-  // The main domain the popup switches off for a page, so one entry covers
-  // every subdomain: www.youtube.com and m.youtube.com both give
-  // youtube.com.
+  // Without a public-suffix database, retain the exact host. Reducing an
+  // arbitrary hostname can switch off unrelated tenants (e.g. github.io).
   function mainDomainForHost(hostname) {
-    const host = normalizeSiteDomain(hostname);
-    if (!host || /^\d+(\.\d+){3}$/.test(host)) {
-      return host;
-    }
-
-    const labels = host.split(".");
-    const tld = labels[labels.length - 1];
-    const secondLevel = labels[labels.length - 2];
-    const keep = labels.length > 2 && tld.length === 2 && COUNTRY_SECOND_LEVEL_LABELS.has(secondLevel) ? 3 : 2;
-    return labels.slice(-keep).join(".");
+    return normalizeSiteDomain(hostname);
   }
 
   function hostMatchesSite(hostname, site) {
@@ -214,12 +198,15 @@
       return null;
     }
 
-    const videoKey = sanitizeText(identity.videoKey, 500);
-    if (!videoKey) {
+    const videoKey = sanitizeText(identity.videoKey, 2200);
+    if (!videoKey || String(identity.videoKey).trim().length > 2200) {
       return null;
     }
 
     const platform = VALID_PLATFORMS.has(identity.platform) ? identity.platform : "unknown";
+    if (videoKey.startsWith("generic:v2:") && !sanitizeUrl(identity.canonicalUrl || identity.rawUrl)) {
+      return null;
+    }
 
     return {
       videoKey,
@@ -236,11 +223,14 @@
       return null;
     }
 
-    const startSeconds = normalizeSeconds(value.startSeconds);
+    let startSeconds = normalizeSeconds(value.startSeconds);
     const rawEnd = value.endSeconds === null || value.endSeconds === undefined
       ? null
       : Number(value.endSeconds);
-    const endSeconds = isValidSeconds(rawEnd) ? rawEnd : null;
+    let endSeconds = isValidSeconds(rawEnd) ? normalizeSeconds(rawEnd) : null;
+    if (endSeconds !== null && endSeconds < startSeconds) {
+      [startSeconds, endSeconds] = [endSeconds, startSeconds];
+    }
     const type = endSeconds === null ? "timestamp" : "range";
     const createdAt = sanitizeText(value.createdAt, 60) || new Date().toISOString();
     const updatedAt = sanitizeText(value.updatedAt, 60) || createdAt;
@@ -263,14 +253,24 @@
       return null;
     }
 
-    const videoKey = sanitizeText(value.videoKey, 500);
-    if (!videoKey) {
+    const videoKey = sanitizeText(value.videoKey, 2200);
+    if (!videoKey || String(value.videoKey).trim().length > 2200) {
       return null;
     }
 
     const scenes = Array.isArray(value.scenes)
       ? value.scenes.map(normalizeScene).filter(Boolean)
       : [];
+    const seenIds = new Set();
+    for (const scene of scenes) {
+      if (seenIds.has(scene.id)) {
+        const base = scene.id.slice(0, 100);
+        let suffix = 2;
+        while (seenIds.has(`${base}~${suffix}`)) suffix += 1;
+        scene.id = `${base}~${suffix}`;
+      }
+      seenIds.add(scene.id);
+    }
     const rawUrls = Array.isArray(value.rawUrls)
       ? value.rawUrls.map(sanitizeUrl).filter(Boolean)
       : [];
@@ -284,6 +284,7 @@
       canonicalUrl: sanitizeUrl(value.canonicalUrl),
       rawUrls: Array.from(new Set(rawUrls)).slice(-MAX_RAW_URLS),
       favorite: value.favorite === true,
+      identityRepairRequired: value.identityRepairRequired === true,
       createdAt,
       updatedAt,
       scenes: sortScenes(scenes)
@@ -295,7 +296,7 @@
       return null;
     }
 
-    const videoKey = sanitizeText(value.videoKey, 500);
+    const videoKey = sanitizeText(value.videoKey, 2200);
     const startSeconds = Number(value.startSeconds);
     const createdAt = sanitizeText(value.createdAt, 60);
     const createdAtMs = Date.parse(createdAt);
@@ -316,7 +317,7 @@
       return null;
     }
 
-    const videoKey = sanitizeText(value.videoKey, 500);
+    const videoKey = sanitizeText(value.videoKey, 2200);
     const sceneId = sanitizeText(value.sceneId, 120);
     const seconds = Number(value.seconds);
     const url = sanitizeUrl(value.url);
@@ -331,7 +332,13 @@
       return null;
     }
 
-    return { videoKey, sceneId, seconds, url, createdAt };
+    // Ownership is additive: old requests remain readable/migratable, but a
+    // missing owner must never let an arbitrary matching tab claim them.
+    const targetTabId = Number.isSafeInteger(value.targetTabId) && value.targetTabId >= 0
+      ? value.targetTabId : null;
+    // Stable fallback preserves pre-token requests through normalization.
+    const requestId = sanitizeText(value.requestId, 120) || sanitizeText(`legacy:${createdAt}:${sceneId}`, 120);
+    return { videoKey, sceneId, seconds, url, createdAt, requestId, targetTabId };
   }
 
   function normalizeState(value) {

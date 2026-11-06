@@ -1,11 +1,12 @@
 (function attachConstants(root) {
   const SceneMarks = root.SceneMarks || {};
 
-  // Schema 2 splits storage so a write carries one video, not the library:
+  // Schema 3 adds query/fragment-aware generic identities. Schema 2 split
+  // storage so a write carries one video, not the library:
   // each saved video lives under `video:<videoKey>`, and settings and the
   // transient state each get a small key of their own. Schema 1 kept
   // everything in the single LEGACY_STORAGE_KEY blob.
-  const SCHEMA_VERSION = 2;
+  const SCHEMA_VERSION = 3;
   const LEGACY_STORAGE_KEY = "scenemarksState";
   const VIDEO_KEY_PREFIX = "video:";
   const STORAGE_KEYS = Object.freeze({
@@ -72,6 +73,8 @@
     UPDATE_SCENE: "SCENEMARKS_UPDATE_SCENE",
     OPEN_LIBRARY: "SCENEMARKS_OPEN_LIBRARY",
     OPEN_VIDEO_URL: "SCENEMARKS_OPEN_VIDEO_URL",
+    OPEN_VIDEO_AT_SCENE: "SCENEMARKS_OPEN_VIDEO_AT_SCENE",
+    GET_TAB_ID: "SCENEMARKS_GET_TAB_ID",
     OPEN_RANDOM_VIDEO: "SCENEMARKS_OPEN_RANDOM_VIDEO",
     OPEN_RANDOM_VIDEOS: "SCENEMARKS_OPEN_RANDOM_VIDEOS",
     PICK_RANDOM_VIDEO: "SCENEMARKS_PICK_RANDOM_VIDEO",

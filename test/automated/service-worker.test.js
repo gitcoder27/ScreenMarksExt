@@ -71,7 +71,10 @@ function loadWorker(seedEntries, options) {
       query: async () => openTabs,
       create: async (options) => {
         openedTabs.push(options);
+        return { id: 1000 + openedTabs.length, ...options };
       },
+      update: async (id, options) => ({ id, ...options }),
+      remove: async () => {},
       onUpdated: event("tabs.onUpdated")
     },
     storage: {
@@ -105,7 +108,7 @@ test("enabling the extension migrates without an install or startup event", asyn
   });
   await settle();
   assert.deepEqual(store.keys(), ["schemaVersion", "settings", `video:${MIGRATED_KEY}`]);
-  assert.equal(store.raw("schemaVersion"), 2);
+  assert.equal(store.raw("schemaVersion"), 3);
   assert.equal(store.raw("settings").duplicateThresholdSeconds, 7);
   assert.deepEqual(store.raw(`video:${MIGRATED_KEY}`).scenes.map((scene) => scene.id), ["scene_1"]);
 });
@@ -129,7 +132,12 @@ test("a later wake in the same load does not read storage; install and browser s
   listeners.onInstalled.forEach((listener) => listener({ reason: "update" }));
   listeners.onStartup.forEach((listener) => listener());
   await settle();
-  assert.equal(first.store.reads, readsBefore);
+  // Browser start also checks the small pendingJump key to drop old-session
+  // tab ownership; no migration read (legacy blob or video keys) happens.
+  const startupReads = first.store.readLog.slice(readsBefore);
+  assert.ok(startupReads.every((keys) => keys && !keys.includes("scenemarksState")
+    && !keys.some((key) => key.startsWith("video:"))), JSON.stringify(startupReads));
+  assert.equal(first.store.writes, writesBefore);
 
   loadWorker(null, { store: first.store, session: {} });
   await settle();
@@ -237,4 +245,123 @@ test("badges read OFF on switched-off and paused sites only", async () => {
   await settle();
   assert.equal(badges[1], "OFF");
   assert.equal(badges[2], "");
+});
+
+test("open-tab matching uses service identity and preserves case-sensitive generic identity", async () => {
+  const { context } = loadWorker({});
+  const key = (url) => {
+    context.testUrl = url;
+    return vm.runInContext("normalizeUrlKey(testUrl)", context);
+  };
+  const watch = "https://www.youtube.com/watch?v=abcdEFGH123";
+  assert.equal(key(watch), key("https://www.youtube.com/shorts/abcdEFGH123"));
+  assert.equal(key(watch), key("https://youtu.be/abcdEFGH123?t=42"));
+  assert.notEqual(key(watch), key("https://www.youtube.com/watch?v=abcdefgh123"));
+  assert.notEqual(key("https://example.com/Watch?id=A"), key("https://example.com/watch?id=A"));
+  assert.notEqual(key("https://example.com/watch?id=A"), key("https://example.com/watch?id=B"));
+  assert.equal(key("https://example.com/watch?id=A&utm_source=mail"), key("https://example.com/watch?id=A"));
+});
+
+test("Random excludes YouTube short-link tabs and respects explicitly empty filters", async () => {
+  const video = { ...legacyVideo(), videoKey: MIGRATED_KEY, platform: "youtube" };
+  const work = loadWorker(videoEntries({ [MIGRATED_KEY]: video }), { tabs: [{ url: "https://youtu.be/abcdEFGH123" }] });
+  for (const message of [
+    { type: "SCENEMARKS_OPEN_RANDOM_VIDEO" },
+    { type: "SCENEMARKS_PICK_RANDOM_VIDEO", payload: { videoKeys: [] } },
+    { type: "SCENEMARKS_OPEN_RANDOM_VIDEOS", payload: { videoKeys: [], count: 3 } }
+  ]) {
+    const response = await new Promise((resolve) => work.listeners.onMessage[0](message, {}, resolve));
+    assert.equal(response.ok, false);
+  }
+  assert.equal(work.openedTabs.length, 0);
+  // Empty filters must also fail when a matching video is NOT open.
+  const closed = loadWorker(videoEntries({ [MIGRATED_KEY]: video }));
+  for (const type of ["SCENEMARKS_PICK_RANDOM_VIDEO", "SCENEMARKS_OPEN_RANDOM_VIDEOS"]) {
+    const response = await new Promise((resolve) => closed.listeners.onMessage[0]({ type, payload: { videoKeys: [], count: 2 } }, {}, resolve));
+    assert.equal(response.ok, false);
+  }
+  assert.equal(closed.openedTabs.length, 0);
+  const unfiltered = await new Promise((resolve) => closed.listeners.onMessage[0]({ type: "SCENEMARKS_PICK_RANDOM_VIDEO" }, {}, resolve));
+  assert.equal(unfiltered.ok, true);
+});
+
+test("generic re-keying merges an existing destination and atomically moves transient references", async () => {
+  const now = new Date().toISOString();
+  const destination = { ...legacyVideo(), videoKey: MIGRATED_KEY, platform: "youtube", title: "New title",
+    scenes: [{ id: "new", startSeconds: 30 }] };
+  const work = loadWorker({
+    schemaVersion: 2,
+    ...videoEntries({ old: legacyVideo(), destination }),
+    activeRangeDraft: { videoKey: LEGACY_KEY, startSeconds: 40, createdAt: now },
+    pendingJump: { videoKey: LEGACY_KEY, sceneId: "scene_1", seconds: 10, url: legacyVideo().canonicalUrl, createdAt: now, targetTabId: 1 }
+  });
+  await work.context.SceneMarks.Migrations.runAll();
+  assert.equal(work.store.raw(`video:${LEGACY_KEY}`), undefined);
+  const stored = work.store.raw(`video:${MIGRATED_KEY}`);
+  assert.equal(stored.title, "New title");
+  assert.deepEqual(stored.scenes.map((scene) => scene.id), ["scene_1", "new"]);
+  assert.equal(work.store.raw("activeRangeDraft").videoKey, MIGRATED_KEY);
+  assert.equal(work.store.raw("pendingJump").videoKey, MIGRATED_KEY);
+  const rekeyWrite = work.store.writeLog.find((entry) => entry.set.includes(`video:${MIGRATED_KEY}`));
+  assert.deepEqual(rekeyWrite.set, ["activeRangeDraft", "pendingJump", `video:${MIGRATED_KEY}`]);
+  const finished = await work.context.SceneMarks.Storage.endRange({ videoKey: MIGRATED_KEY, platform: "youtube" }, 50);
+  assert.equal(finished.ok, true);
+  const jump = (await work.context.SceneMarks.Storage.getState({ videoKeys: [] })).pendingJump;
+  assert.equal((await work.context.SceneMarks.Storage.consumePendingJump(MIGRATED_KEY, jump.requestId, 1)).ok, true);
+  const writes = work.store.writes;
+  await work.context.SceneMarks.Migrations.runAll();
+  assert.equal(work.store.writes, writes);
+});
+
+test("schema-3 migration preserves query identities and retains ambiguous legacy scenes for repair", async () => {
+  const keyA = "generic:https://example.com:/watch";
+  const keyB = "generic:https://other.example:/watch";
+  const source = { ...legacyVideo(), videoKey: keyA, platform: "generic",
+    canonicalUrl: "https://example.com/watch", rawUrls: ["https://example.com/watch?id=A&utm_source=mail"] };
+  const mixed = { ...source, videoKey: keyB, canonicalUrl: "https://other.example/watch",
+    rawUrls: ["https://other.example/watch?id=A", "https://other.example/watch?id=B"] };
+  const work = loadWorker({ schemaVersion: 2, ...videoEntries({ source, mixed }) });
+  await work.context.SceneMarks.Migrations.runAll();
+  const migrated = work.store.raw("video:generic:v2:https://example.com/watch?id=A");
+  assert.equal(migrated.canonicalUrl, "https://example.com/watch?id=A");
+  assert.equal(migrated.title, source.title);
+  assert.deepEqual(migrated.scenes.map((scene) => scene.id), ["scene_1"]);
+  assert.equal(work.store.raw(`video:${keyA}`), undefined);
+  const retained = work.store.raw(`video:${keyB}`);
+  assert.equal(retained.identityRepairRequired, true);
+  assert.deepEqual(retained.scenes.map((scene) => scene.id), ["scene_1"]);
+  assert.deepEqual(retained.rawUrls, mixed.rawUrls);
+  const writes = work.store.writes;
+  await work.context.SceneMarks.Migrations.runAll();
+  assert.equal(work.store.writes, writes);
+});
+
+test("a failed re-key write preserves old data and transient references for retry", async () => {
+  const now = new Date().toISOString();
+  const work = loadWorker({ schemaVersion: 3, ...videoEntries({ old: legacyVideo() }),
+    activeRangeDraft: { videoKey: LEGACY_KEY, startSeconds: 10, createdAt: now } });
+  const realSet = work.store.local.set;
+  work.store.local.set = (_values, callback) => {
+    work.context.chrome.runtime.lastError = { message: "write failed" };
+    callback();
+    work.context.chrome.runtime.lastError = null;
+  };
+  await assert.rejects(work.context.SceneMarks.Migrations.runAll(), /write failed/);
+  assert.ok(work.store.raw(`video:${LEGACY_KEY}`));
+  assert.equal(work.store.raw("activeRangeDraft").videoKey, LEGACY_KEY);
+  work.store.local.set = realSet;
+  await work.context.SceneMarks.Migrations.runAll();
+  assert.ok(work.store.raw(`video:${MIGRATED_KEY}`));
+  assert.equal(work.store.raw("activeRangeDraft").videoKey, MIGRATED_KEY);
+});
+
+test("v2 generic saves still upgrade when a dedicated platform adapter becomes available", async () => {
+  const old = { ...legacyVideo(), videoKey: "generic:v2:https://www.youtube.com/watch?v=abcdEFGH123" };
+  const work = loadWorker({ schemaVersion: 3, ...videoEntries({ old }) });
+  await work.context.SceneMarks.Migrations.runAll();
+  assert.equal(work.store.raw(`video:${old.videoKey}`), undefined);
+  assert.equal(work.store.raw(`video:${MIGRATED_KEY}`).title, old.title);
+  const writes = work.store.writes;
+  await work.context.SceneMarks.Migrations.runAll();
+  assert.equal(work.store.writes, writes);
 });

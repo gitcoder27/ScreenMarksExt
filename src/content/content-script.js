@@ -37,15 +37,14 @@
   // so concurrent tabs cannot lose each other's read-modify-write updates;
   // reads stay local to this context. Storage is split per video, so the
   // reads here load the current video and a few small keys, not the
-  // library; only the overlay's Library tab reads every video.
+  // library. Private saved content is shown only on extension pages.
   const Storage = SceneMarks.Storage.createClient();
   const { STORAGE_KEYS } = SceneMarks.Constants;
   let settings = null;
   let overlay = null;
-  let overlayRefreshTimer = null;
-  let overlayRefreshDeferred = false;
   let pendingJumpTimer = null;
   let pendingJumpInFlight = false;
+  let ownTabId = null;
   let contextDead = false;
   let hotkeyListener = null;
   let stopNavigationWatcher = null;
@@ -71,7 +70,6 @@
     }
 
     contextDead = true;
-    root.clearTimeout(overlayRefreshTimer);
     root.clearTimeout(pendingJumpTimer);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     if (stopNavigationWatcher) {
@@ -142,17 +140,13 @@
         return;
       }
 
-      scheduleOverlayRefresh(1000);
+      syncOverlayVisibility();
       schedulePendingJumpCheck(500);
     },
-    onPlaybackTick: (seconds) => {
+    onPlaybackTick: () => {
       if (isContextDead()) {
         tearDownDeadContext();
         return;
-      }
-
-      if (overlay) {
-        overlay.updatePlaybackTime(seconds);
       }
     }
   });
@@ -274,6 +268,12 @@
       return `Digit${token}`;
     }
 
+    const numpad = /^(numpad)([0-9]|enter|decimal|add|subtract|multiply|divide|equal|comma|parenleft|parenright|clear|clearentry)$/.exec(token);
+    if (numpad) {
+      const names = { enter: "Enter", decimal: "Decimal", add: "Add", subtract: "Subtract", multiply: "Multiply", divide: "Divide", equal: "Equal", comma: "Comma", parenleft: "ParenLeft", parenright: "ParenRight", clear: "Clear", clearentry: "ClearEntry" };
+      return `Numpad${names[numpad[2]] || numpad[2]}`;
+    }
+
     if (/^f\d{1,2}$/.test(token)) {
       return token.toUpperCase();
     }
@@ -303,7 +303,7 @@
     return detector.getSnapshot();
   }
 
-  function requireDetectedVideo() {
+  function requireDetectedVideo(payload) {
     const snapshot = getCurrentSnapshot();
     if (!snapshot.detected) {
       return {
@@ -321,25 +321,26 @@
       };
     }
 
+    if (payload && payload.capture) {
+      const capture = payload.capture;
+      if (capture.videoKey !== snapshot.videoKey || !Number.isFinite(capture.seconds) || capture.seconds < 0) {
+        return { ok: false, error: "The video changed. Start the capture again." };
+      }
+      return { ok: true, snapshot: { ...snapshot, currentTimeSeconds: capture.seconds } };
+    }
     return { ok: true, snapshot };
   }
 
-  // Only the overlay's Library tab needs the full videos map, and only while
-  // it is open; the popup's GET_CONTEXT message would otherwise carry the
-  // whole library each open, and every tab would keep a copy of it. Every
-  // other caller reads just the current video.
-  async function getContextResponse(options) {
+  // Only extension UI requests saved context; the page overlay reads none.
+  async function getContextResponse() {
     const snapshot = getCurrentSnapshot();
-    const state = options && options.includeVideos
-      ? await Storage.getState()
-      : await Storage.getState({ videoKeys: [snapshot.videoKey] });
+    const state = await Storage.getState({ videoKeys: [snapshot.videoKey] });
     const savedVideo = snapshot.videoKey ? state.videos[snapshot.videoKey] || null : null;
 
     return {
       ok: true,
       context: snapshot,
       video: savedVideo,
-      videos: options && options.includeVideos ? state.videos : undefined,
       scenes: savedVideo ? savedVideo.scenes : [],
       activeRangeDraft: state.activeRangeDraft,
       pendingJump: state.pendingJump,
@@ -348,7 +349,7 @@
   }
 
   async function saveTimestamp(payload) {
-    const detected = requireDetectedVideo();
+    const detected = requireDetectedVideo(payload);
     if (!detected.ok) {
       return detected;
     }
@@ -378,14 +379,14 @@
     }
 
     if (result.ok) {
-      scheduleOverlayRefresh(100);
+      syncOverlayVisibility();
     }
 
     return result;
   }
 
   async function startRange(payload) {
-    const detected = requireDetectedVideo();
+    const detected = requireDetectedVideo(payload);
     if (!detected.ok) {
       return detected;
     }
@@ -397,7 +398,7 @@
     );
 
     if (result.ok) {
-      scheduleOverlayRefresh(100);
+      syncOverlayVisibility();
       return {
         ...result,
         message: `Range start ${formatSeconds(result.draft.startSeconds)}`
@@ -408,14 +409,14 @@
   }
 
   async function endRange(payload) {
-    const detected = requireDetectedVideo();
+    const detected = requireDetectedVideo(payload);
     if (!detected.ok) {
       return detected;
     }
 
     const result = await Storage.endRange(detected.snapshot, detected.snapshot.currentTimeSeconds, payload || {});
     if (result.ok) {
-      scheduleOverlayRefresh(100);
+      syncOverlayVisibility();
       return {
         ...result,
         message: `Range saved ${formatRange(result.scene.startSeconds, result.scene.endSeconds)}`
@@ -426,7 +427,7 @@
   }
 
   async function toggleRange(payload) {
-    const detected = requireDetectedVideo();
+    const detected = requireDetectedVideo(payload);
     if (!detected.ok) {
       return detected;
     }
@@ -505,10 +506,10 @@
   async function seekTo(payload) {
     const currentSettings = getSettingsSync();
     const behavior = payload && payload.behavior ? payload.behavior : currentSettings.defaultJumpBehavior;
-    // No overlay refresh here: a seek changes no stored data, and the seek's
-    // own timeupdate moves the highlight. A refresh would re-read storage and
-    // rebuild the overlay while the site's player is rebuffering.
-    return detector.seekTo(payload && payload.seconds, behavior, { verify: Boolean(payload && payload.verify) });
+    return detector.seekTo(payload && payload.seconds, behavior, {
+      verify: Boolean(payload && payload.verify),
+      expectedVideoKey: payload && payload.expectedVideoKey
+    });
   }
 
   async function deleteScene(payload) {
@@ -525,35 +526,6 @@
     }
 
     return Storage.updateScene(payload.videoKey, payload.sceneId, payload.updates || {});
-  }
-
-  function getVideoUrl(video) {
-    return video && (video.canonicalUrl || (Array.isArray(video.rawUrls) && video.rawUrls[0])) || "";
-  }
-
-  async function openVideoAtScene(video, scene) {
-    const url = getVideoUrl(video);
-    if (!video || !scene || !url) {
-      return { ok: false, error: "This saved video does not have an openable URL." };
-    }
-
-    const pendingResult = await Storage.setPendingJump({
-      videoKey: video.videoKey,
-      sceneId: scene.id,
-      seconds: scene.startSeconds,
-      url
-    });
-
-    if (!pendingResult.ok) {
-      return pendingResult;
-    }
-
-    const response = await chrome.runtime.sendMessage({
-      type: MESSAGE_TYPES.OPEN_VIDEO_URL,
-      payload: { url }
-    });
-
-    return response && response.ok ? { ok: true } : response || { ok: false, error: "Could not open video." };
   }
 
   // Capture messages come from the popup and the browser-level shortcuts;
@@ -658,7 +630,7 @@
   }
 
   async function openLibrary() {
-    await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.OPEN_LIBRARY });
+    return chrome.runtime.sendMessage({ type: MESSAGE_TYPES.OPEN_LIBRARY });
   }
 
   async function openRandomVideoFromLibrary() {
@@ -666,16 +638,9 @@
       type: MESSAGE_TYPES.OPEN_RANDOM_VIDEO
     });
 
-    return response || { ok: false, error: "Could not open a random video." };
-  }
-
-  async function pickRandomVideoFromLibrary(payload) {
-    const response = await chrome.runtime.sendMessage({
-      type: MESSAGE_TYPES.PICK_RANDOM_VIDEO,
-      payload: payload || {}
-    });
-
-    return response || { ok: false, error: "Could not pick a random video." };
+    return response && response.ok
+      ? { ok: true, message: "Opening a random saved video" }
+      : response || { ok: false, error: "Could not open a random video." };
   }
 
   async function toggleOverlayVisibility() {
@@ -685,9 +650,7 @@
     settings = result.settings;
     const enabled = Boolean(settings && settings.enableFloatingButton);
 
-    if (overlay && overlay.setEnabled(shouldShowOverlay())) {
-      scheduleOverlayRefresh(0);
-    }
+    if (overlay) overlay.setEnabled(shouldShowOverlay());
 
     return { ok: true, message: enabled ? "Overlay shown" : "Overlay hidden" };
   }
@@ -701,7 +664,7 @@
 
       const currentSettings = getSettingsSync();
       // Returning before preventDefault leaves the key to the page.
-      if (!currentSettings.enablePageHotkeys || !isActiveHere() || event.repeat || isTextInputTarget(event)) {
+      if (!settings || !event.isTrusted || !currentSettings.enablePageHotkeys || !isActiveHere() || event.repeat || isTextInputTarget(event)) {
         return;
       }
 
@@ -738,6 +701,7 @@
       }
 
       event.preventDefault();
+      event.stopImmediatePropagation();
       let result;
       try {
         result = await action();
@@ -764,29 +728,6 @@
     root.addEventListener("keydown", hotkeyListener, true);
   }
 
-  // The overlay shows the video it last rendered (a navigation to another
-  // video refreshes it through the detector) and, while its Library tab is
-  // open, every video. Reading the key from the last render avoids a DOM
-  // scan per storage event.
-  function changeAffectsOverlay(changes) {
-    const shown = overlay.getLatestState();
-    const shownVideoKey = shown && shown.context ? shown.context.videoKey : null;
-    const showsLibrary = overlay.isShowingLibrary();
-
-    return Object.keys(changes).some((key) => {
-      if (SceneMarks.Storage.isVideoStorageKey(key)) {
-        return showsLibrary || (Boolean(shownVideoKey) && key === SceneMarks.Storage.videoStorageKey(shownVideoKey));
-      }
-
-      if (key === STORAGE_KEYS.ACTIVE_RANGE_DRAFT) {
-        const { oldValue, newValue } = changes[key];
-        return Boolean(shownVideoKey) && [oldValue, newValue].some((draft) => draft && draft.videoKey === shownVideoKey);
-      }
-
-      return key === STORAGE_KEYS.SETTINGS;
-    });
-  }
-
   function installStorageListener() {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (isContextDead() || areaName !== "local") {
@@ -804,44 +745,16 @@
         }
       }
 
-      if (overlay && changeAffectsOverlay(changes)) {
-        scheduleOverlayRefresh(100);
-      }
+      if (changes[STORAGE_KEYS.PENDING_JUMP]) schedulePendingJumpCheck(100);
     });
   }
 
-  function scheduleOverlayRefresh(delayMs) {
-    root.clearTimeout(overlayRefreshTimer);
-    // Background tabs skip the storage read + rebuild and catch up once
-    // they are shown again.
-    if (document.hidden) {
-      overlayRefreshDeferred = true;
-      return;
-    }
-
-    overlayRefreshTimer = root.setTimeout(() => {
-      if (isContextDead()) {
-        tearDownDeadContext();
-        return;
-      }
-
-      if (!overlay) {
-        return;
-      }
-
-      overlay.refresh().catch((error) => {
-        if (isInvalidContextError(error)) {
-          tearDownDeadContext();
-        }
-      });
-    }, Number.isFinite(delayMs) ? delayMs : 250);
+  function syncOverlayVisibility() {
+    if (overlay) overlay.setEnabled(shouldShowOverlay());
   }
 
   function handleVisibilityChange() {
-    if (!document.hidden && overlayRefreshDeferred) {
-      overlayRefreshDeferred = false;
-      scheduleOverlayRefresh(0);
-    }
+    if (!document.hidden) schedulePendingJumpCheck(100);
   }
 
   function schedulePendingJumpCheck(delayMs) {
@@ -858,93 +771,76 @@
           return;
         }
 
-        if (overlay) {
-          overlay.showToast(error.message || "Could not complete queued jump", "error");
-        }
+        schedulePendingJumpCheck(5000);
       });
     }, Number.isFinite(delayMs) ? delayMs : 500);
   }
 
+  let pendingRetryDelay = 1000;
+  let lastPendingRequest = null;
   async function attemptPendingJump() {
-    if (isContextDead() || pendingJumpInFlight) {
-      return;
-    }
-
-    const snapshot = getCurrentSnapshot();
-    if (!snapshot.detected || !snapshot.videoKey) {
-      return;
-    }
-
-    // Consume only after the seek is confirmed: a seek that lands too early
-    // (and is overridden by the site's own resume seek) or fails leaves the
-    // jump queued for the next attempt instead of losing it.
-    const state = await Storage.getState({ videoKeys: [] });
-    const pendingJump = state.pendingJump;
-    if (!pendingJump || pendingJump.videoKey !== snapshot.videoKey) {
-      return;
-    }
-
+    if (isContextDead() || pendingJumpInFlight) return;
     pendingJumpInFlight = true;
-    let seekResult;
+    let retry = false;
     try {
-      seekResult = await seekTo({ seconds: pendingJump.seconds, verify: true });
-      if (seekResult.ok) {
-        await Storage.consumePendingJump(snapshot.videoKey);
+      const state = await Storage.getState({ videoKeys: [] });
+      const pending = state.pendingJump;
+      if (!pending || pending.targetTabId === null) return;
+      if (ownTabId === null) {
+        const identity = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.GET_TAB_ID });
+        if (!identity || !identity.ok || !Number.isSafeInteger(identity.tabId) || identity.tabId < 0) {
+          // A temporarily unavailable worker must not strand an owned jump.
+          retry = true;
+          return;
+        }
+        ownTabId = identity.tabId;
+      }
+      const snapshot = getCurrentSnapshot();
+      if (ownTabId === null || !pending || pending.targetTabId !== ownTabId
+        || !snapshot.detected || pending.videoKey !== snapshot.videoKey) return;
+      if (lastPendingRequest !== pending.requestId) {
+        pendingRetryDelay = 1000;
+        lastPendingRequest = pending.requestId;
+      }
+      retry = true;
+      const result = await seekTo({ seconds: pending.seconds, verify: true, expectedVideoKey: pending.videoKey });
+      const current = getCurrentSnapshot();
+      if (!current.detected || current.videoKey !== pending.videoKey) {
+        retry = false;
+        return;
+      }
+      if (result.ok) {
+        const consumed = await Storage.consumePendingJump(pending.videoKey, pending.requestId);
+        if (consumed.ok && overlay) overlay.showToast("Queued jump completed", "success");
       }
     } finally {
       pendingJumpInFlight = false;
-    }
-
-    if (overlay) {
-      overlay.showToast(
-        seekResult.ok
-          ? `Jumped to ${formatSeconds(pendingJump.seconds)}`
-          : seekResult.error || "Queued jump could not seek yet",
-        seekResult.ok ? "success" : "error"
-      );
+      // A success also checks once more: a replacement may have arrived while
+      // the old seek was in flight. Expired/cancelled requests stop on read.
+      if (retry) {
+        schedulePendingJumpCheck(pendingRetryDelay);
+        pendingRetryDelay = Math.min(pendingRetryDelay * 2, 5000);
+      }
     }
   }
 
   async function initOverlay() {
-    // An orphaned copy of this script (from before an extension reload) may
-    // still have its overlay or toast mounted; remove it before creating ours.
-    document.querySelectorAll(".scenemarks-overlay, .scenemarks-toast").forEach((staleNode) => staleNode.remove());
-
+    document.querySelectorAll(".scenemarks-overlay, .scenemarks-toast").forEach((node) => node.remove());
     overlay = SceneMarks.Overlay.createOverlay({
-      getState: guard((options) => getContextResponse({ includeVideos: Boolean(options && options.includeVideos) })),
-      quickSave: guard(() => saveTimestamp({ quick: true })),
-      toggleRange: guard(() => toggleRange({ quick: true })),
-      seekTo: guard((seconds) => seekTo({ seconds })),
-      deleteScene: guard((payload) => deleteScene(payload)),
-      updateSceneFavorite: guard(async (payload) => {
-        if (!payload || !payload.videoKey || !payload.sceneId) {
-          return { ok: false, error: "Missing favorite details." };
-        }
-
-        return Storage.updateScene(payload.videoKey, payload.sceneId, { favorite: payload.favorite === true });
-      }),
-      updateVideoFavorite: guard(async (payload) => {
-        if (!payload || !payload.videoKey) {
-          return { ok: false, error: "Missing favorite details." };
-        }
-
-        return Storage.updateVideo(payload.videoKey, { favorite: payload.favorite === true });
-      }),
-      openVideoAtScene: guard(openVideoAtScene),
-      pickRandomVideo: guard((payload) => pickRandomVideoFromLibrary(payload))
+      quickSave: guard(() => isActiveHere() ? saveTimestamp({ quick: true }) : INACTIVE_RESPONSE),
+      toggleRange: guard(() => isActiveHere() ? toggleRange({ quick: true }) : INACTIVE_RESPONSE),
+      openLibrary: guard(() => isActiveHere() ? openLibrary() : INACTIVE_RESPONSE)
     });
-    if (overlay.setEnabled(shouldShowOverlay())) {
-      scheduleOverlayRefresh(0);
-    }
+    overlay.setEnabled(shouldShowOverlay());
   }
 
   async function init() {
     installMessageListener();
+    installPageHotkeys();
+    installStorageListener();
     await loadSettings();
     detector.start();
     stopNavigationWatcher = installNavigationWatcher();
-    installPageHotkeys();
-    installStorageListener();
     document.addEventListener("visibilitychange", handleVisibilityChange);
     await initOverlay();
     schedulePendingJumpCheck(1000);

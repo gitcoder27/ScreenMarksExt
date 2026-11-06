@@ -330,15 +330,24 @@
     await refreshContext();
   }
 
-  async function saveMoment() {
-    if (!latestContext || !latestContext.context.detected) {
-      setStatus("No active video detected.", true);
-      return;
+  async function captureActionContext() {
+    const response = await sendToActiveTab({ type: MESSAGE_TYPES.GET_CONTEXT });
+    if (!response.ok || !response.context || !response.context.detected) {
+      setStatus(response.error || "No active video detected.", true);
+      return null;
     }
+    latestContext = response;
+    return {
+      capture: { videoKey: response.context.videoKey, seconds: response.context.currentTimeSeconds }
+    };
+  }
 
+  async function saveMoment() {
+    const captured = await captureActionContext();
+    if (!captured) return;
     const value = await openSceneDialog({
       title: "Save Moment",
-      timeLabel: `Time: ${formatSeconds(latestContext.context.currentTimeSeconds)}`,
+      timeLabel: `Time: ${formatSeconds(captured.capture.seconds)}`,
       confirmLabel: "Save"
     });
 
@@ -346,7 +355,7 @@
       return;
     }
 
-    await saveTimestampValue(value, false);
+    await saveTimestampValue({ ...value, capture: captured.capture }, false);
   }
 
   async function saveTimestampValue(value, allowDuplicate) {
@@ -372,20 +381,17 @@
   }
 
   async function handleRangeButton() {
-    if (!latestContext || !latestContext.context.detected) {
-      setStatus("No active video detected.", true);
-      return;
-    }
-
+    const captured = await captureActionContext();
+    if (!captured) return;
     const draft = latestContext.activeRangeDraft;
     const isCurrentDraft = draft && draft.videoKey === latestContext.context.videoKey;
 
     if (!isCurrentDraft) {
-      const response = await sendToActiveTab({ type: MESSAGE_TYPES.START_RANGE, payload: {} });
+      const response = await sendToActiveTab({ type: MESSAGE_TYPES.START_RANGE, payload: { capture: captured.capture } });
       if (response.conflict) {
         const overwrite = confirm("A range is already started on another video. Discard it and start here?");
         if (overwrite) {
-          await sendToActiveTab({ type: MESSAGE_TYPES.START_RANGE, payload: { overwrite: true } });
+          await sendToActiveTab({ type: MESSAGE_TYPES.START_RANGE, payload: { overwrite: true, capture: captured.capture } });
         }
       } else if (!response.ok) {
         setStatus(response.error || "Could not mark range start.", true);
@@ -396,7 +402,7 @@
 
     const value = await openSceneDialog({
       title: "Save Scene Range",
-      timeLabel: `${formatSeconds(draft.startSeconds)} -> ${formatSeconds(latestContext.context.currentTimeSeconds)}`,
+      timeLabel: `${formatSeconds(draft.startSeconds)} -> ${formatSeconds(captured.capture.seconds)}`,
       confirmLabel: "Save Range"
     });
 
@@ -404,7 +410,7 @@
       return;
     }
 
-    await saveRangeValue(value, false);
+    await saveRangeValue({ ...value, capture: captured.capture }, false);
   }
 
   async function saveRangeValue(value, allowDuplicate) {
@@ -570,7 +576,7 @@
       return;
     }
 
-    // Turning off stores the main domain so subdomains are covered; turning
+    // Turning off stores the displayed hostname and covers its subdomains; turning
     // on passes the full hostname so every entry covering it is removed.
     const turningOn = Boolean(getDisabledSite());
     let result = null;

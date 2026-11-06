@@ -159,7 +159,7 @@ test("normalizeSettings clamps the duplicate threshold and validates jump behavi
 });
 
 test("normalizeSiteDomain reduces pasted URLs and hosts to a bare hostname", () => {
-  assert.equal(Schema.normalizeSiteDomain("https://www.YouTube.com/watch?v=1"), "youtube.com");
+  assert.equal(Schema.normalizeSiteDomain("https://www.YouTube.com/watch?v=1"), "www.youtube.com");
   assert.equal(Schema.normalizeSiteDomain("music.youtube.com:8080"), "music.youtube.com");
   assert.equal(Schema.normalizeSiteDomain("*.netflix.com"), "netflix.com");
   assert.equal(Schema.normalizeSiteDomain("localhost"), "localhost");
@@ -167,12 +167,12 @@ test("normalizeSiteDomain reduces pasted URLs and hosts to a bare hostname", () 
   assert.equal(Schema.normalizeSiteDomain(""), "");
 });
 
-test("mainDomainForHost keeps the registrable domain, country suffixes included", () => {
-  assert.equal(Schema.mainDomainForHost("www.youtube.com"), "youtube.com");
-  assert.equal(Schema.mainDomainForHost("m.youtube.com"), "youtube.com");
-  assert.equal(Schema.mainDomainForHost("www.primevideo.com"), "primevideo.com");
-  assert.equal(Schema.mainDomainForHost("www.amazon.co.uk"), "amazon.co.uk");
-  assert.equal(Schema.mainDomainForHost("www.hotstar.com.au"), "hotstar.com.au");
+test("mainDomainForHost retains uncertain hostnames, country suffixes included", () => {
+  assert.equal(Schema.mainDomainForHost("www.youtube.com"), "www.youtube.com");
+  assert.equal(Schema.mainDomainForHost("m.youtube.com"), "m.youtube.com");
+  assert.equal(Schema.mainDomainForHost("www.primevideo.com"), "www.primevideo.com");
+  assert.equal(Schema.mainDomainForHost("www.amazon.co.uk"), "www.amazon.co.uk");
+  assert.equal(Schema.mainDomainForHost("www.hotstar.com.au"), "www.hotstar.com.au");
   assert.equal(Schema.mainDomainForHost("192.168.1.20"), "192.168.1.20");
   assert.equal(Schema.mainDomainForHost("localhost"), "localhost");
 });
@@ -200,8 +200,43 @@ test("normalizeSettings defaults the site switches and cleans the site list", ()
     disabledSites: ["YouTube.com", "www.youtube.com", "bad site", 7, "netflix.com"]
   });
   assert.equal(settings.extensionEnabled, true);
-  assert.deepEqual(settings.disabledSites, ["youtube.com", "netflix.com"]);
+  assert.deepEqual(settings.disabledSites, ["youtube.com", "www.youtube.com", "netflix.com"]);
 
   const many = Array.from({ length: SceneMarks.Constants.MAX_DISABLED_SITES + 5 }, (_, index) => `site${index}.com`);
   assert.equal(Schema.normalizeSettings({ disabledSites: many }).disabledSites.length, SceneMarks.Constants.MAX_DISABLED_SITES);
+});
+
+test("site switches retain hosted tenants and uncertain country-domain hosts", () => {
+  for (const host of ["alice.github.io", "www.github.io", "foo.blogspot.com", "media.example.co.uk", "tenant.example.com.au"]) {
+    const site = Schema.mainDomainForHost(host);
+    assert.equal(site, host);
+    const settings = Schema.normalizeSettings({ disabledSites: [site] });
+    assert.equal(Schema.isEnabledForHost(settings, host), false);
+    const sibling = `another.${host.split(".").slice(1).join(".")}`;
+    assert.equal(Schema.isEnabledForHost(settings, sibling), true);
+  }
+});
+
+test("normalization repairs scene IDs deterministically, including suffix collisions", () => {
+  const input = { videoKey: "a", scenes: [
+    { id: "x", startSeconds: 1 }, { id: "x", startSeconds: 2 }, { id: "x~2", startSeconds: 3 }
+  ] };
+  const normalized = Schema.normalizeVideo(input);
+  assert.equal(new Set(normalized.scenes.map((scene) => scene.id)).size, 3);
+  assert.deepEqual(Schema.normalizeVideo(normalized), normalized);
+});
+
+test("pending-jump normalization preserves owned requests and safely reads legacy ownerless ones", () => {
+  const jump = { videoKey: "a", sceneId: "s", seconds: 42, url: "https://example.com/watch", createdAt: new Date().toISOString() };
+  for (const targetTabId of [0, 42]) {
+    const normalized = Schema.normalizePendingJump({ ...jump, targetTabId, requestId: "stable" });
+    assert.equal(normalized.targetTabId, targetTabId);
+    assert.equal(normalized.requestId, "stable");
+  }
+  for (const targetTabId of [undefined, null, -1, 0.5, "42"]) {
+    const legacy = Schema.normalizePendingJump({ ...jump, targetTabId });
+    assert.equal(legacy.targetTabId, null);
+    assert.equal(legacy.seconds, 42);
+    assert.equal(Schema.normalizePendingJump(legacy).requestId, legacy.requestId);
+  }
 });

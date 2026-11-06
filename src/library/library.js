@@ -339,6 +339,9 @@
 
     const header = createElement("div", "video-card__header");
     const details = createElement("div");
+    if (video.identityRepairRequired) {
+      details.append(createElement("p", "hint", "Legacy video identity is ambiguous. Export a backup, separate its scenes into the correct video records in the JSON, and re-import after removing this legacy entry. Keep the original backup until verified."));
+    }
     const platform = createElement("span", "platform-pill", video.platform);
     const title = document.createElement("button");
     title.type = "button";
@@ -470,26 +473,11 @@
       return;
     }
 
-    const pendingAction = await runStorageAction(() => Storage.setPendingJump({
-      videoKey: video.videoKey,
-      sceneId: scene.id,
-      seconds: scene.startSeconds,
-      url
-    }));
-
-    if (!pendingAction.ok) {
-      return;
-    }
-
-    const pendingResult = pendingAction.value;
-    if (!pendingResult.ok) {
-      elements.summaryBox.textContent = pendingResult.error || "Could not queue timestamp jump.";
-      return;
-    }
-
+    // The worker allocates the destination before publishing its owned jump.
+    // A separate storage RPC here would let an already-open tab steal it.
     chrome.runtime.sendMessage({
-      type: SceneMarks.Constants.MESSAGE_TYPES.OPEN_VIDEO_URL,
-      payload: { url }
+      type: SceneMarks.Constants.MESSAGE_TYPES.OPEN_VIDEO_AT_SCENE,
+      payload: { url, videoKey: video.videoKey, sceneId: scene.id, seconds: scene.startSeconds }
     }, (response) => {
       const error = chrome.runtime.lastError;
       if (error || !response || !response.ok) {
@@ -660,7 +648,7 @@
     }
 
     elements.importInput.value = "";
-    elements.summaryBox.textContent = `Import complete: ${action.value.videoCount} videos.`;
+    elements.summaryBox.textContent = `Import complete: ${action.value.videoCount} videos; ${action.value.mergedScenes} scenes merged, ${action.value.conflictingScenes} conflicting annotations preserved separately, ${action.value.repairedScenes} scenes repaired, ${action.value.rejectedScenes} invalid scenes rejected.`;
   }
 
   let loadingState = false;

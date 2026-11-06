@@ -321,6 +321,9 @@
       const video = findActiveVideo();
       const target = Number(seconds);
       const verify = Boolean(options && options.verify);
+      const expectedVideoKey = options && options.expectedVideoKey;
+      const isSameTarget = () => !expectedVideoKey || (video === findActiveVideo()
+        && createSnapshot(video).videoKey === expectedVideoKey);
 
       if (!video) {
         return { ok: false, error: "No active video detected." };
@@ -335,6 +338,7 @@
         await waitForSeekQuiet(video, SEEK_QUIET_MS, SEEK_SETTLE_TIMEOUT_MS);
       }
 
+      if (!isSameTarget()) return { ok: false, error: "The video changed before the jump." };
       const wasPaused = video.paused;
       if (!applySeek(video, target)) {
         return { ok: false, error: "This site blocked seeking right now." };
@@ -352,11 +356,13 @@
       if (verify) {
         let landed = false;
         for (let attempt = 0; attempt < 2 && !landed; attempt += 1) {
+          if (!isSameTarget()) return { ok: false, error: "The video changed during the jump." };
           if (attempt > 0) {
             applySeek(video, target);
           }
 
           await waitForSeekQuiet(video, SEEK_QUIET_MS, SEEK_SETTLE_TIMEOUT_MS);
+          if (!isSameTarget()) return { ok: false, error: "The video changed during the jump." };
           landed = Math.abs(video.currentTime - target) <= SEEK_VERIFY_TOLERANCE_SECONDS;
         }
 

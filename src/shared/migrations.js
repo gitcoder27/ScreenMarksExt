@@ -1,18 +1,15 @@
 (function attachMigrations(root) {
   const SceneMarks = root.SceneMarks || {};
 
-  // Adds source's scenes (matched by id) and URLs to target and keeps
+  // Preserves source annotations and URLs in target and keeps
   // target's own fields. Source URLs go first so target's stay the newest.
   function absorbVideo(target, source) {
-    const seen = new Set(target.scenes.map((scene) => scene.id));
-    const scenes = target.scenes.concat(source.scenes.filter((scene) => !seen.has(scene.id)));
-
+    const merged = SceneMarks.Storage.mergeVideo(target, source);
     return {
-      ...target,
-      favorite: target.favorite || source.favorite,
-      rawUrls: Array.from(new Set([...source.rawUrls, ...target.rawUrls])),
-      scenes: SceneMarks.Schema.sortScenes(scenes),
-      updatedAt: new Date().toISOString()
+      ...merged,
+      title: target.title,
+      canonicalUrl: target.canonicalUrl,
+      rawUrls: Array.from(new Set([...source.rawUrls, ...target.rawUrls]))
     };
   }
 
@@ -75,101 +72,86 @@
     return { ok: true, migratedCount };
   }
 
-  function findAdapterIdentity(video, adapters) {
-    const urls = [video.canonicalUrl, ...(video.rawUrls || [])].filter(Boolean);
-    for (const raw of urls) {
-      let url;
+  function findAdapterIdentity(video) {
+    const { Adapters } = SceneMarks;
+    // Old generic canonical URLs discarded the query/hash. Prefer raw URLs,
+    // which retain the evidence needed to identify content conservatively.
+    const urls = video.rawUrls.length ? video.rawUrls : [video.canonicalUrl];
+    const identities = new Map();
+    for (const raw of urls.filter(Boolean)) {
       try {
-        url = new URL(raw);
-      } catch (_error) {
-        continue;
-      }
-
-      const adapter = adapters.find((candidate) => candidate.matches(url));
-      if (!adapter) {
-        continue;
-      }
-
-      const videoKey = adapter.getVideoKey(url);
-      if (videoKey && videoKey !== video.videoKey) {
-        return {
-          platform: adapter.id,
-          videoKey,
-          canonicalUrl: adapter.getCanonicalUrl(url) || video.canonicalUrl
-        };
-      }
+        const url = new URL(raw);
+        const adapter = Adapters.getAdapter(url);
+        const videoKey = adapter.getVideoKey(url) || Adapters.GenericAdapter.getVideoKey(url);
+        const canonicalUrl = adapter.getCanonicalUrl(url) || Adapters.GenericAdapter.getCanonicalUrl(url);
+        const identity = SceneMarks.Schema.normalizeIdentity({ platform: adapter.id, videoKey, canonicalUrl });
+        if (!identity) return null;
+        identities.set(videoKey, {
+          videoKey: identity.videoKey,
+          platform: identity.platform,
+          canonicalUrl: identity.canonicalUrl
+        });
+      } catch (_error) { /* Invalid stored URLs cannot identify a video. */ }
     }
-
-    return null;
+    return identities.size === 1 ? [...identities.values()][0] : null;
   }
 
-  // Videos saved before a site had a dedicated adapter live under
-  // `generic:<origin>:<pathname>` keys, which collapse distinct videos
-  // (e.g. every /watch?v=... page) into one entry. Re-key them using the
-  // adapter that now matches their stored URLs.
+  // Schema 3 changes generic identities, retaining query and fragment data.
+  // Never assign already mixed scenes to an arbitrary content ID. Ambiguous
+  // records stay on their old key and are marked for manual backup repair.
   async function migrateLegacyGenericVideos() {
-    const adapters = ((SceneMarks.Adapters && SceneMarks.Adapters.list) || [])
-      .filter((adapter) => adapter && adapter.id !== "generic");
-    const { Storage } = SceneMarks;
-
-    if (!adapters.length) {
-      return { ok: true, migratedCount: 0 };
-    }
-
-    // The key names alone show which videos are generic, so an idle pass
-    // reads no video data.
-    const genericKeys = (await Storage.listVideoKeys()).filter((key) => key.startsWith("generic:"));
-    if (!genericKeys.length) {
-      return { ok: true, migratedCount: 0 };
-    }
-
-    // The write must see both ends of each re-key, so read the generic
-    // videos first to learn their new keys, then scope one write to both.
-    const genericState = await Storage.getState({ videoKeys: genericKeys });
-    const targetKeys = Object.values(genericState.videos)
-      .map((video) => findAdapterIdentity(video, adapters))
-      .filter(Boolean)
-      .map((identity) => identity.videoKey);
-    if (!targetKeys.length) {
-      return { ok: true, migratedCount: 0 };
-    }
-
-    const scope = new Set([...genericKeys, ...targetKeys]);
-    let migratedCount = 0;
-    await Storage.updateState((state) => {
-      let changed = false;
-      for (const video of Object.values(state.videos)) {
-        if (!String(video.videoKey).startsWith("generic:")) {
-          continue;
-        }
-
-        // A video edited since the read above could point outside the
-        // scope, where this write cannot see an existing entry to merge.
-        const identity = findAdapterIdentity(video, adapters);
-        if (!identity || !scope.has(identity.videoKey)) {
-          continue;
-        }
-
-        delete state.videos[video.videoKey];
-        const existing = state.videos[identity.videoKey];
-        state.videos[identity.videoKey] = existing
-          ? absorbVideo(existing, video)
-          : {
-            ...video,
-            videoKey: identity.videoKey,
-            platform: identity.platform,
-            canonicalUrl: identity.canonicalUrl
-          };
-
-        migratedCount += 1;
-        changed = true;
+    const { Storage, Schema, Constants, Adapters } = SceneMarks;
+    if (!Adapters || !Adapters.getAdapter) return { ok: true, migratedCount: 0 };
+    const genericKeys = (await Storage.listVideoKeys()).filter((key) => {
+      if (!key.startsWith("generic:")) return false;
+      if (!key.startsWith("generic:v2:")) return true;
+      // Keep supporting generic → platform upgrades when a dedicated adapter
+      // is added later, without reading unchanged v2 generic video records.
+      try {
+        const url = new URL(key.slice("generic:v2:".length));
+        const adapter = Adapters.getAdapter(url);
+        return adapter.id !== "generic" && Boolean(adapter.getVideoKey(url));
+      } catch (_error) {
+        return false;
       }
-
-      // An idle pass must not write: every write reaches every open tab
-      // through storage.onChanged.
-      return changed ? state : Storage.SKIP_WRITE;
-    }, { videoKeys: Array.from(scope) });
-
+    });
+    if (!genericKeys.length) return { ok: true, migratedCount: 0 };
+    let migratedCount = 0;
+    await Storage.updateRawKeys(async (get) => {
+      const { ACTIVE_RANGE_DRAFT, PENDING_JUMP } = Constants.STORAGE_KEYS;
+      const raw = await get([...genericKeys.map(Storage.videoStorageKey), ACTIVE_RANGE_DRAFT, PENDING_JUMP]);
+      const writes = {};
+      const removals = [];
+      let draft = Schema.normalizeDraft(raw[ACTIVE_RANGE_DRAFT]);
+      let jump = Schema.normalizePendingJump(raw[PENDING_JUMP]);
+      for (const key of genericKeys) {
+        const storageKey = Storage.videoStorageKey(key);
+        const video = Schema.normalizeVideo(raw[storageKey]);
+        if (!video) continue;
+        const identity = findAdapterIdentity(video);
+        if (!identity) {
+          if (!video.identityRepairRequired) writes[storageKey] = { ...video, identityRepairRequired: true };
+          continue;
+        }
+        if (identity.videoKey === video.videoKey) continue;
+        const targetKey = Storage.videoStorageKey(identity.videoKey);
+        const existingRaw = writes[targetKey] || (await get([targetKey]))[targetKey];
+        const existing = Schema.normalizeVideo(existingRaw);
+        const rekeyed = { ...video, ...identity, identityRepairRequired: false };
+        writes[targetKey] = Schema.normalizeVideo(existing ? absorbVideo(existing, rekeyed) : rekeyed);
+        removals.push(storageKey);
+        if (draft && draft.videoKey === key) {
+          draft = { ...draft, videoKey: identity.videoKey };
+          writes[ACTIVE_RANGE_DRAFT] = draft;
+        }
+        if (jump && jump.videoKey === key) {
+          jump = { ...jump, videoKey: identity.videoKey, url: identity.canonicalUrl };
+          writes[PENDING_JUMP] = jump;
+        }
+        migratedCount += 1;
+      }
+      return Object.keys(writes).length ? { set: writes, remove: removals } : Storage.SKIP_WRITE;
+    });
     return { ok: true, migratedCount };
   }
 

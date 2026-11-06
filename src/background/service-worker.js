@@ -57,6 +57,15 @@ function runMigrations({ force = false } = {}) {
 runMigrations();
 chrome.runtime.onInstalled.addListener(() => runMigrations());
 chrome.runtime.onStartup.addListener(() => runMigrations());
+// Tab IDs are only meaningful within a browser session. A normal MV3 worker
+// wake preserves ownership; browser startup must not reuse an old tab ID.
+chrome.runtime.onStartup.addListener(() => {
+  SceneMarks.Storage.getState({ videoKeys: [] }).then((state) => {
+    const pending = state.pendingJump;
+    return pending && pending.targetTabId !== null
+      ? SceneMarks.Storage.clearPendingJump(pending.requestId) : null;
+  }).catch((error) => console.warn("SceneMarks queued-jump reset failed:", error));
+});
 
 const CONTENT_SCRIPT_FILES = [
   "src/shared/constants.js",
@@ -88,7 +97,6 @@ const STORAGE_RPC_METHODS = new Set([
   "updateScene",
   "updateVideo",
   "updateSettings",
-  "setPendingJump",
   "consumePendingJump",
   "clearPendingJump",
   "deleteVideo",
@@ -98,10 +106,9 @@ const STORAGE_RPC_METHODS = new Set([
   "setSiteEnabled"
 ]);
 
-// Bulk-destructive methods that only extension pages (options, library)
-// ever call; content scripts run inside arbitrary web pages and must not
-// be able to wipe or replace the library.
-const EXTENSION_PAGE_ONLY_RPC_METHODS = new Set(["importState", "clearAllData"]);
+// Library replacement/deletion and global jump cancellation belong to
+// extension pages. Content scripts may complete only their own queued jump.
+const EXTENSION_PAGE_ONLY_RPC_METHODS = new Set(["importState", "clearAllData", "clearPendingJump"]);
 
 // sender.url is set by the browser, so a page (or a compromised renderer)
 // cannot claim an extension-page URL. Extension pages opened in a tab
@@ -109,6 +116,11 @@ const EXTENSION_PAGE_ONLY_RPC_METHODS = new Set(["importState", "clearAllData"])
 function isExtensionPageSender(sender) {
   return Boolean(sender && typeof sender.url === "string"
     && sender.url.startsWith(chrome.runtime.getURL("")));
+}
+
+function senderTabId(sender) {
+  const id = sender && sender.tab && sender.tab.id;
+  return sender && sender.frameId === 0 && Number.isSafeInteger(id) && id >= 0 ? id : null;
 }
 
 function sendTabMessage(tabId, message) {
@@ -203,6 +215,51 @@ async function openVideoUrl(rawUrl) {
   }
 }
 
+async function openVideoAtScene(payload) {
+  const { Storage, Schema } = SceneMarks;
+  // Validate before allocating a tab. The placeholder is not published.
+  const target = Schema.normalizePendingJump({
+    ...payload, targetTabId: 0, createdAt: new Date().toISOString()
+  });
+  if (!target) return { ok: false, error: "Invalid jump target." };
+
+  let tab = null;
+  let requestId = null;
+  try {
+    // about:blank cannot run our content script. Publish ownership before
+    // navigating, even when an existing tab is already playing this video.
+    tab = await chrome.tabs.create({ url: "about:blank" });
+    if (!tab || !Number.isSafeInteger(tab.id) || tab.id < 0) throw new Error("Could not allocate a destination tab.");
+    const queued = await Storage.setPendingJump({ ...target, targetTabId: tab.id });
+    if (!queued.ok) throw new Error(queued.error);
+    requestId = queued.pendingJump.requestId;
+    await chrome.tabs.update(tab.id, { url: target.url });
+    return { ok: true, tabId: tab.id };
+  } catch (error) {
+    // A newer opening may have replaced this request while navigation failed.
+    if (requestId) {
+      try {
+        await Storage.clearPendingJump(requestId);
+      } catch (cleanupError) {
+        console.warn("SceneMarks queued-jump cleanup failed:", cleanupError);
+      }
+    }
+    if (tab && Number.isSafeInteger(tab.id) && tab.id >= 0) {
+      await chrome.tabs.remove(tab.id).catch(() => {});
+    }
+    return { ok: false, error: error.message || "Could not open video at this scene." };
+  }
+}
+
+// Keep publication in click order even if creating the first tab is slow.
+// Storage itself still uses its single writer queue for every mutation.
+let sceneOpenQueue = Promise.resolve();
+function queueVideoAtScene(payload) {
+  const opening = sceneOpenQueue.then(() => openVideoAtScene(payload));
+  sceneOpenQueue = opening.then(() => {}, () => {});
+  return opening;
+}
+
 function normalizeUrlKey(rawUrl) {
   try {
     const url = new URL(String(rawUrl || ""));
@@ -210,22 +267,8 @@ function normalizeUrlKey(rawUrl) {
       return null;
     }
 
-    // Ignore most query params and fragments: players append tracking
-    // noise (trackId, ref, etc.) that would defeat exact-URL matching.
-    // YouTube is the exception: its video id lives in ?v=, so dropping it
-    // would collapse every watch URL to the same key and make one open
-    // YouTube tab exclude the whole platform.
-    const host = url.host.toLowerCase();
-    const path = url.pathname.replace(/\/+$/, "").toLowerCase() || "/";
-    let key = `${url.protocol}//${host}${path}`;
-    if (/(^|\.)youtube\.com$/.test(host) && path === "/watch") {
-      const videoId = url.searchParams.get("v");
-      if (videoId) {
-        key += `?v=${videoId.toLowerCase()}`;
-      }
-    }
-
-    return key;
+    const adapter = SceneMarks.Adapters.getAdapter(url);
+    return adapter.getVideoKey(url) || SceneMarks.Adapters.GenericAdapter.getVideoKey(url);
   } catch (_error) {
     return null;
   }
@@ -298,7 +341,7 @@ async function pickRandomVideoCandidate(payload) {
   const state = await SceneMarks.Storage.getState();
   let videos = Object.values(state.videos);
 
-  if (Array.isArray(options.videoKeys) && options.videoKeys.length) {
+  if (Array.isArray(options.videoKeys)) {
     const allowed = new Set(options.videoKeys);
     videos = videos.filter((video) => allowed.has(video.videoKey));
   }
@@ -373,7 +416,7 @@ async function openRandomVideos(payload) {
   const state = await SceneMarks.Storage.getState();
   let videos = Object.values(state.videos);
 
-  if (Array.isArray(options.videoKeys) && options.videoKeys.length) {
+  if (Array.isArray(options.videoKeys)) {
     const allowed = new Set(options.videoKeys);
     videos = videos.filter((video) => allowed.has(video.videoKey));
   }
@@ -506,7 +549,11 @@ async function handleStorageRpc(payload, sender) {
   }
 
   const args = Array.isArray(payload.args) ? payload.args : [];
-  const result = await SceneMarks.Storage[method](...args);
+  // Never trust a caller-supplied ownership argument. Even a same-video tab
+  // with the correct request token can consume only its own top-frame jump.
+  const result = method === "consumePendingJump"
+    ? await SceneMarks.Storage.consumePendingJump(args[0], args[1], senderTabId(sender))
+    : await SceneMarks.Storage[method](...args);
   if (method === "importState") {
     // An import can bring back keys saved before an adapter existed.
     runMigrations({ force: true });
@@ -535,6 +582,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_VIDEO_URL) {
     return respondWith(openVideoUrl(message.payload && message.payload.url), sendResponse);
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_VIDEO_AT_SCENE) {
+    if (!isExtensionPageSender(sender)) {
+      sendResponse({ ok: false, error: "Only SceneMarks pages may open a video at a saved scene." });
+      return false;
+    }
+    return respondWith(queueVideoAtScene(message.payload), sendResponse);
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.GET_TAB_ID) {
+    const tabId = senderTabId(sender);
+    sendResponse({ ok: tabId !== null, tabId });
+    return false;
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEO) {

@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SceneMarks Settings</title>
-    <link rel="icon" type="image/png" sizes="32x32" href="../assets/icons/icon-32.png">
-    <link rel="icon" type="image/png" sizes="128x128" href="../assets/icons/icon-128.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="../../assets/icons/icon-32.png">
+    <link rel="icon" type="image/png" sizes="128x128" href="../../assets/icons/icon-128.png">
     <link rel="stylesheet" href="options.css">
   </head>
   <body>
@@ -41,7 +41,7 @@
           <h2>Capture</h2>
           <label class="switch-row">
             <input id="enableFloatingButton" type="checkbox">
-            <span>Enable draggable overlay panel</span>
+            <span>Enable draggable capture controls</span>
           </label>
           <label class="switch-row">
             <input id="quickSaveRequiresNote" type="checkbox">
@@ -69,9 +69,9 @@
           <h2>Generic Pages</h2>
           <label class="switch-row">
             <input id="enableGenericSites" type="checkbox">
-            <span>Enable generic page support after popup activation</span>
+            <span>Enable saving on generic video pages</span>
           </label>
-          <p class="hint">SceneMarks does not request all-site access. On unsupported pages, open the extension popup to inject the content script for that active tab.</p>
+          <p class="hint">SceneMarks requests all-site access and automatically detects HTML5 video on web pages. This setting controls saving on generic sites; disabling it does not change browser permissions.</p>
         </section>
 
         <section class="settings-section">

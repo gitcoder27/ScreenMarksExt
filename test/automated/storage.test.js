@@ -163,7 +163,7 @@ test("mutations that change nothing do not write", async () => {
   await Storage.updateVideo("netflix:missing", { favorite: true });
   await Storage.deleteVideo("netflix:missing");
   await Storage.clearPendingJump();
-  await Storage.consumePendingJump(IDENTITY.videoKey);
+  await Storage.consumePendingJump(IDENTITY.videoKey, store.readState().pendingJump?.requestId, 1);
   const settings = await Storage.updateSettings({ duplicateThresholdSeconds: 3 });
 
   assert.equal(store.writes, writesBefore);
@@ -253,7 +253,7 @@ test("pending jumps are consumed once and only by the matching video", async () 
     videoKey: IDENTITY.videoKey,
     sceneId,
     seconds: 10,
-    url: IDENTITY.canonicalUrl
+    targetTabId: 1, url: IDENTITY.canonicalUrl
   });
   assert.equal(set.ok, true);
 
@@ -261,13 +261,13 @@ test("pending jumps are consumed once and only by the matching video", async () 
   assert.equal(wrongVideo.ok, false);
   assert.equal(store.readState().pendingJump.sceneId, sceneId);
 
-  const consumed = await Storage.consumePendingJump(IDENTITY.videoKey);
+  const consumed = await Storage.consumePendingJump(IDENTITY.videoKey, store.readState().pendingJump?.requestId, 1);
   assert.equal(consumed.ok, true);
   assert.equal(consumed.pendingJump.seconds, 10);
   assert.equal(store.readState().pendingJump, null);
 });
 
-test("importState merges favorites, skips known scenes, and keeps new ones", async () => {
+test("importState merges favorites and preserves conflicting same-ID annotations", async () => {
   const saved = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 10, note: "original" });
 
   const result = await Storage.importState({
@@ -286,11 +286,12 @@ test("importState merges favorites, skips known scenes, and keeps new ones", asy
   });
 
   // The result travels back over RPC, so it is a count, not the library.
-  assert.deepEqual(result, { ok: true, videoCount: 1 });
+  assert.deepEqual(result, { ok: true, videoCount: 1, mergedScenes: 0, conflictingScenes: 1, repairedScenes: 0, rejectedScenes: 0 });
   const video = store.readState().videos[IDENTITY.videoKey];
   assert.equal(video.favorite, true);
   assert.equal(video.title, "Imported title");
-  assert.deepEqual(video.scenes.map((scene) => scene.id), [saved.scene.id, "scene_brand_new"]);
+  assert.deepEqual(video.scenes.map((scene) => scene.note), ["original", "same scene, same id", "brand new"]);
+  assert.equal(new Set(video.scenes.map((scene) => scene.id)).size, 3);
 });
 
 test("importState with merge disabled replaces the library", async () => {
@@ -463,9 +464,9 @@ test("settings, favorites and jumps write only the key they change", async () =>
     videoKey: IDENTITY.videoKey,
     sceneId: saved.scene.id,
     seconds: 10,
-    url: IDENTITY.canonicalUrl
+    targetTabId: 1, url: IDENTITY.canonicalUrl
   });
-  await Storage.consumePendingJump(IDENTITY.videoKey);
+  await Storage.consumePendingJump(IDENTITY.videoKey, store.readState().pendingJump?.requestId, 1);
 
   assert.deepEqual(store.writeLog.slice(writesBefore), [
     { set: ["settings"], remove: [] },
@@ -497,7 +498,7 @@ test("scoped reads load only the named videos", async () => {
   const everything = await Storage.getState();
 
   assert.deepEqual(Object.keys(scoped.videos), [IDENTITY.videoKey]);
-  assert.deepEqual(sharedOnly.videos, {});
+  assert.deepEqual(Object.keys(sharedOnly.videos), []);
   assert.equal(sharedOnly.settings.duplicateThresholdSeconds, 3);
   assert.equal(Object.keys(everything.videos).length, 6);
   assert.deepEqual(await Storage.getScenesForVideo("youtube:notSaved"), []);
@@ -511,7 +512,7 @@ test("clearAllData removes every key and records the schema version", async () =
 
   assert.deepEqual(store.keys(), ["schemaVersion"]);
   const state = await Storage.getState();
-  assert.deepEqual(state.videos, {});
+  assert.deepEqual(Object.keys(state.videos), []);
   assert.equal(state.settings.duplicateThresholdSeconds, 3);
 });
 
@@ -558,4 +559,105 @@ test("concurrent site switches from two tabs both persist", async () => {
   ]);
 
   assert.deepEqual(store.raw("settings").disabledSites.sort(), ["netflix.com", "youtube.com"]);
+});
+
+test("an older jump completion cannot consume its replacement and competing consumers are atomic", async () => {
+  const target = { videoKey: IDENTITY.videoKey, sceneId: "same", seconds: 10, targetTabId: 1, url: IDENTITY.canonicalUrl };
+  const a = await Storage.setPendingJump(target);
+  const b = await Storage.setPendingJump({ ...target, seconds: 20 });
+  assert.notEqual(a.pendingJump.requestId, b.pendingJump.requestId);
+  const before = store.writes;
+  assert.equal((await Storage.consumePendingJump(IDENTITY.videoKey, a.pendingJump.requestId, 1)).ok, false);
+  assert.equal((await Storage.consumePendingJump(IDENTITY.videoKey)).ok, false);
+  assert.equal(store.writes, before);
+  assert.equal(store.raw("pendingJump").requestId, b.pendingJump.requestId);
+  const consumers = await Promise.all([
+    Storage.consumePendingJump(IDENTITY.videoKey, b.pendingJump.requestId, 1),
+    Storage.consumePendingJump(IDENTITY.videoKey, b.pendingJump.requestId, 1)
+  ]);
+  assert.equal(consumers.filter((result) => result.ok).length, 1);
+  assert.equal(store.raw("pendingJump"), null);
+});
+
+test("imports merge compatible metadata and preserve distinct annotations at coincident times", async () => {
+  const saved = await Storage.saveScene(IDENTITY, { startSeconds: 10, note: "same", tags: ["old"] });
+  const incoming = { videoKey: IDENTITY.videoKey, scenes: [
+    { id: saved.scene.id, startSeconds: 10, note: "same", tags: ["new"], favorite: true },
+    { id: "different", startSeconds: 10, note: "same", tags: ["third"] },
+    { id: "nearby", startSeconds: 10.2, note: "same", tags: ["unique"] },
+    { id: saved.scene.id, startSeconds: 10, note: "edited note" }
+  ] };
+  const result = await Storage.importState({ videos: { incoming } });
+  const scenes = (await Storage.getScenesForVideo(IDENTITY.videoKey));
+  assert.equal(result.mergedScenes, 2);
+  assert.equal(result.repairedScenes, 1); // Repeated imported ID is repaired.
+  assert.equal(scenes.length, 3);
+  assert.deepEqual(scenes[0].tags, ["old", "new", "third"]);
+  assert.equal(scenes[0].favorite, true);
+  assert.equal(scenes.some((scene) => scene.note === "edited note"), true);
+  assert.equal(scenes.some((scene) => scene.startSeconds === 10.2), true);
+  const count = scenes.length;
+  await Storage.importState({ videos: { incoming } });
+  assert.equal((await Storage.getScenesForVideo(IDENTITY.videoKey)).length, count);
+});
+
+test("import dictionaries safely preserve prototype-like identities", async () => {
+  const videos = Object.create(null);
+  for (const key of ["constructor", "__proto__", "toString"]) {
+    videos[key] = { videoKey: key, scenes: [{ id: "scene", startSeconds: 1 }] };
+  }
+  const result = await Storage.importState(JSON.parse(JSON.stringify({ videos })));
+  assert.equal(result.videoCount, 3);
+  const state = await Storage.getState();
+  assert.equal(Object.getPrototypeOf(state.videos), null);
+  assert.deepEqual(Object.keys(state.videos).sort(), ["__proto__", "constructor", "toString"]);
+  await Storage.updateScene("__proto__", "scene", { note: "safe edit" });
+  assert.equal((await Storage.getScenesForVideo("__proto__"))[0].note, "safe edit");
+  assert.equal(({}).note, undefined);
+});
+
+test("imports repair duplicate IDs and reversed ranges, report invalid scenes, and edits remain isolated", async () => {
+  const result = await Storage.importState({ videos: { a: {
+    videoKey: "a", scenes: [
+      { id: "duplicate", startSeconds: 20, endSeconds: 10 },
+      { id: "duplicate", startSeconds: 40, note: "second" },
+      { id: "invalid", startSeconds: -1 }
+    ]
+  } } });
+  assert.equal(result.repairedScenes, 2);
+  assert.equal(result.rejectedScenes, 1);
+  const scenes = await Storage.getScenesForVideo("a");
+  assert.equal(scenes[0].startSeconds, 10);
+  assert.equal(scenes[0].endSeconds, 20);
+  assert.notEqual(scenes[0].id, scenes[1].id);
+  await Storage.deleteScene("a", scenes[0].id);
+  assert.deepEqual((await Storage.getScenesForVideo("a")).map((scene) => scene.note), ["second"]);
+});
+
+test("compatible scenes whose tag union exceeds the cap remain separately preserved", async () => {
+  const tags = Array.from({ length: 12 }, (_, i) => `tag${i}`);
+  const saved = await Storage.saveScene(IDENTITY, { startSeconds: 1, note: "same", tags });
+  const result = await Storage.importState({ videos: { a: { videoKey: IDENTITY.videoKey,
+    scenes: [{ id: saved.scene.id, startSeconds: 1, note: "same", tags: ["extra"] }] } } });
+  assert.equal(result.conflictingScenes, 1);
+  const scenes = await Storage.getScenesForVideo(IDENTITY.videoKey);
+  assert.equal(scenes.length, 2);
+  assert.deepEqual(scenes[0].tags, tags);
+  assert.deepEqual(scenes[1].tags, ["extra"]);
+});
+
+test("pending-jump publication and consumption require a valid destination tab", async () => {
+  const jump = { videoKey: IDENTITY.videoKey, sceneId: "s", seconds: 42, url: IDENTITY.canonicalUrl };
+  for (const targetTabId of [undefined, null, -1, 1.5, "1"]) {
+    assert.equal((await Storage.setPendingJump({ ...jump, targetTabId })).ok, false);
+  }
+  assert.equal(store.writes, 0);
+  const saved = await Storage.setPendingJump({ ...jump, targetTabId: 1 });
+  const token = saved.pendingJump.requestId;
+  const writes = store.writes;
+  for (const id of [undefined, null, 2]) {
+    assert.equal((await Storage.consumePendingJump(IDENTITY.videoKey, token, id)).ok, false);
+  }
+  assert.equal(store.writes, writes);
+  assert.equal((await Storage.consumePendingJump(IDENTITY.videoKey, token, 1)).ok, true);
 });

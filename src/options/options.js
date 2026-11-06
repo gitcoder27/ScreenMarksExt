@@ -2,6 +2,7 @@
   const Storage = SceneMarks.Storage.createClient();
   const elements = {};
   let recordTarget = null;
+  let baseline = null;
 
   function byId(id) {
     return document.getElementById(id);
@@ -123,7 +124,7 @@
 
   // Codes matched verbatim by the content script; anything else falls back
   // to event.key so unmatched layouts keep today's behavior.
-  const VERBATIM_CODE_PATTERN = /^(F\d{1,2}|Arrow(Up|Down|Left|Right)|PageUp|PageDown|Home|End|Insert|Delete|Space|Enter|Escape|Tab|Backspace)$/;
+  const VERBATIM_CODE_PATTERN = /^(Numpad([0-9]|Enter|Decimal|Add|Subtract|Multiply|Divide|Equal|Comma|ParenLeft|ParenRight|Clear|ClearEntry)|F\d{1,2}|Arrow(Up|Down|Left|Right)|PageUp|PageDown|Home|End|Insert|Delete|Space|Enter|Escape|Tab|Backspace)$/;
 
   function tokenFromCode(code) {
     if (!code) {
@@ -257,55 +258,61 @@
     }
   }
 
-  async function loadSettings() {
-    const settings = await Storage.getSettings();
+  const SETTING_FIELDS = {
+    enableFloatingButton: "checked", quickSaveRequiresNote: "checked",
+    duplicateThresholdSeconds: "value", defaultJumpBehavior: "value",
+    enableGenericSites: "checked", enablePageHotkeys: "checked"
+  };
+  const HOTKEY_ACTIONS = Object.keys(SceneMarks.Constants.DEFAULT_SETTINGS.hotkeys);
 
+  function readForm() {
+    const values = { hotkeys: {} };
+    for (const [field, property] of Object.entries(SETTING_FIELDS)) {
+      values[field] = field === "duplicateThresholdSeconds" ? Number(elements[field][property]) : elements[field][property];
+    }
+    for (const action of HOTKEY_ACTIONS) values.hotkeys[action] = elements[`${action}Hotkey`].value;
+    return values;
+  }
+
+  function synchronizeSettings(settings, previous = baseline) {
+    const current = readForm();
     renderSiteSwitches(settings);
-    elements.enableFloatingButton.checked = settings.enableFloatingButton;
-    elements.quickSaveRequiresNote.checked = settings.quickSaveRequiresNote;
-    elements.duplicateThresholdSeconds.value = String(settings.duplicateThresholdSeconds);
-    elements.defaultJumpBehavior.value = settings.defaultJumpBehavior;
-    elements.enableGenericSites.checked = settings.enableGenericSites;
-    elements.enablePageHotkeys.checked = settings.enablePageHotkeys;
-    elements.quickSaveHotkey.value = settings.hotkeys.quickSave;
-    elements.toggleRangeHotkey.value = settings.hotkeys.toggleRange;
-    elements.startRangeHotkey.value = settings.hotkeys.startRange;
-    elements.endRangeHotkey.value = settings.hotkeys.endRange;
-    elements.nextSceneHotkey.value = settings.hotkeys.nextScene;
-    elements.previousSceneHotkey.value = settings.hotkeys.previousScene;
-    elements.randomVideoHotkey.value = settings.hotkeys.randomVideo;
-    elements.toggleOverlayHotkey.value = settings.hotkeys.toggleOverlay;
-    elements.openLibraryHotkey.value = settings.hotkeys.openLibrary;
+    for (const [field, property] of Object.entries(SETTING_FIELDS)) {
+      if (!previous || current[field] === previous[field]) elements[field][property] = settings[field];
+    }
+    for (const action of HOTKEY_ACTIONS) {
+      if (!previous || current.hotkeys[action] === previous.hotkeys[action]) {
+        elements[`${action}Hotkey`].value = settings.hotkeys[action];
+      }
+    }
+    baseline = settings;
+  }
+
+  async function loadSettings() {
+    synchronizeSettings(await Storage.getSettings());
   }
 
   async function saveSettings(event) {
     event.preventDefault();
-
+    if (!baseline) return;
+    const submitted = readForm();
+    const updates = {};
+    for (const field of Object.keys(SETTING_FIELDS)) {
+      if (submitted[field] !== baseline[field]) updates[field] = submitted[field];
+    }
+    for (const action of HOTKEY_ACTIONS) {
+      if (submitted.hotkeys[action] !== baseline.hotkeys[action]) {
+        updates.hotkeys = updates.hotkeys || {};
+        updates.hotkeys[action] = submitted.hotkeys[action];
+      }
+    }
     try {
-      await Storage.updateSettings({
-        enableFloatingButton: elements.enableFloatingButton.checked,
-        quickSaveRequiresNote: elements.quickSaveRequiresNote.checked,
-        duplicateThresholdSeconds: Number(elements.duplicateThresholdSeconds.value),
-        defaultJumpBehavior: elements.defaultJumpBehavior.value,
-        enableGenericSites: elements.enableGenericSites.checked,
-        enablePageHotkeys: elements.enablePageHotkeys.checked,
-        hotkeys: {
-          quickSave: elements.quickSaveHotkey.value,
-          toggleRange: elements.toggleRangeHotkey.value,
-          startRange: elements.startRangeHotkey.value,
-          endRange: elements.endRangeHotkey.value,
-          nextScene: elements.nextSceneHotkey.value,
-          previousScene: elements.previousSceneHotkey.value,
-          randomVideo: elements.randomVideoHotkey.value,
-          toggleOverlay: elements.toggleOverlayHotkey.value,
-          openLibrary: elements.openLibraryHotkey.value
-        }
-      });
+      const saved = await Storage.updateSettings(updates);
+      synchronizeSettings(saved, submitted);
     } catch (error) {
       setStatus(storageStatusMessage(error), true);
       return;
     }
-
     setStatus("Settings saved.", false);
   }
 
@@ -386,7 +393,7 @@
     chrome.storage.onChanged.addListener((changes, areaName) => {
       const change = changes[SceneMarks.Constants.STORAGE_KEYS.SETTINGS];
       if (areaName === "local" && change) {
-        renderSiteSwitches(SceneMarks.Schema.normalizeSettings(change.newValue));
+        synchronizeSettings(SceneMarks.Schema.normalizeSettings(change.newValue));
       }
     });
     elements.openLibraryButton.addEventListener("click", () => {

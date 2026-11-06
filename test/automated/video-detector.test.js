@@ -225,3 +225,19 @@ test("verified seekTo waits for an in-progress site seek before seeking", async 
   assert.deepEqual(video.seekWrites, [300]);
   assert.equal(video.currentTime, 300);
 });
+
+test("queued seek refuses a new identity on the same media element after readiness wait", async () => {
+  const detector = loadDetector();
+  let key = "video:A";
+  globalThis.SceneMarks.Adapters = { getVideoIdentity: () => ({ videoKey: key, platform: "generic" }) };
+  globalThis.location = { href: "https://example.com/watch?id=A" };
+  video.readyState = 0;
+  const seeking = detector.seekTo(300, "preserve-play-state", { expectedVideoKey: "video:A" });
+  key = "video:B";
+  video.readyState = 4;
+  video.dispatchEvent(new Event("loadedmetadata"));
+  const result = await seeking;
+  assert.equal(result.ok, false);
+  assert.match(result.error, /video changed/);
+  assert.deepEqual(video.seekWrites, []);
+});
