@@ -139,7 +139,9 @@
   const MAX_VOICE_TEMPLATE_FRAMES = 150;
   // Bumped whenever feature extraction changes: templates recorded with
   // another version no longer match and must be recorded again.
-  const VOICE_FEATURE_VERSION = 1;
+  // 2: raw mic audio (no browser noise suppression or auto-gain) and
+  // floor-relative trimming that keeps soft consonants.
+  const VOICE_FEATURE_VERSION = 2;
   const VOICE_COOLDOWN_MS = 700;
   const VOICE_AUTO_OFF_CHOICES = Object.freeze([0, 15, 30, 60, 120]);
 

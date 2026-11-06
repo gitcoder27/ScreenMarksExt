@@ -106,7 +106,7 @@ Every command shows a toast on the page, such as `Voice: next · Jumped to 04:12
 
 1. Open Settings → **Voice Commands**. Click **Allow Microphone** and accept the browser prompt. On macOS the browser itself also needs microphone access in System Settings → Privacy & Security → Microphone.
 2. Pick a **Microphone**. **System default** follows macOS: your headphone mic while headphones are plugged in, the built-in mic otherwise. Pick a specific mic to always use it, even with headphones plugged in. If that mic is unplugged, the default is used until it comes back.
-3. Click **Record** next to each command you want and say the word three times, the way you will say it while watching. Short words that sound clearly different work best ("skip" and "next" rather than "back" and "black"). After recording, each word shows how many of its own takes were recognized. "Sounds like ..." means two words are too similar.
+3. Click **Record** next to each command you want and say the word three times, the way you will say it while watching, with a short pause before and after. Taps, clicks and other sounds are skipped without stopping the recording. If one take sounds different from the other two (a slip or a clipped word), you are asked for one more. Short words that sound clearly different work best ("skip" and "next" rather than "back" and "black"). After saving, each word shows how many of its own takes were recognized. "Sounds like ..." means two words are too similar: record one of them again more distinctly, or choose another word.
 4. Click **Start Test** and say your words. You will see what was heard, without anything running.
 5. Turn voice on with the **Listen for voice commands** switch, the popup's **Voice** row, or `Alt+Shift+V`.
 
@@ -118,7 +118,9 @@ While voice is on, the browser's microphone indicator (the orange dot on macOS) 
 - **Listen only while a tab with a video is active**: the microphone closes when you switch to a tab without a video and reopens when you return.
 - **Turn voice back on after the browser restarts**: off by default, so a browser restart turns voice off and the microphone is never on without you choosing it.
 - **Turn voice off on its own** after 15 minutes to 2 hours with no video playing. "Playing" means a tab is making sound (even with headphones or the Mac muted) or the active tab's video is not paused.
-- **Diagnostics** shows what the listener is doing (mic, level, recent sounds, CPU), with **Copy Report** for bug reports.
+- **Diagnostics** shows what the listener is doing (mic, level, recent sounds, CPU), with **Copy Report** for bug reports. **Save Troubleshooting Recording** downloads the audio of the words recorded or tested on the Settings page (the last 3 minutes, held in memory only) and what the recognizer decided, as a file in your Downloads folder, to help tune recognition.
+
+The microphone is used raw: the browser's call processing (noise suppression, automatic gain, echo cancellation) is off, because it removes the soft consonants that tell words apart. Words recorded before this change must be recorded again; Settings and the popup say so.
 
 ### The lineup
 

@@ -17,6 +17,7 @@
   // options.onUtterance({ samples, frames, ... })  a speech-like sound
   // options.onRejected({ rejected, ... })           a sound that was not
   // options.onStateChange(status)                   mic opened/failed/closed
+  // options.onAudio(samples)                         every raw batch (troubleshooting)
   function createCapture(options) {
     const vad = VoiceFeatures.createVad();
     let context = null;
@@ -59,6 +60,7 @@
 
     function handleBatch(samples) {
       const t0 = performance.now();
+      if (options.onAudio) options.onAudio(samples);
       for (let start = 0; start + FRAME <= samples.length; start += FRAME) {
         const frame = samples.subarray(start, start + FRAME);
         status.frames += 1;
@@ -157,11 +159,17 @@
       }
       setState("opening");
       const deviceId = await resolveDevice();
+      // The browser's call processing is off. Noise suppression removes
+      // the soft consonants that tell words apart ("s" in pause, "k-s-t" in
+      // next), and auto-gain lifts the room noise after every word, which
+      // holds the voice gate open. Matching is against the user's own voice
+      // through the same mic, so raw audio is what both sides should see.
+      // (Echo cancellation is moot with headphones or a muted Mac.)
       const audio = {
         channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
       };
       if (deviceId) {
         audio.deviceId = { exact: deviceId };

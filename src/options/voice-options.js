@@ -13,11 +13,22 @@
   const SAMPLE_TIMEOUT_MS = 10000;
 
   const REJECTION_TEXT = {
-    click: "That sounded like a tap or click",
-    "no-voice": "That did not sound like a voice",
-    "too-short": "That was too short",
-    "too-long": "That was too long for a command"
+    click: "ignored a tap or click",
+    "no-voice": "ignored a sound that was not a voice",
+    "too-short": "ignored a sound too short for a word",
+    "too-long": "ignored a sound too long for a command"
   };
+  // What to try when the same kind of sound is ignored again and again.
+  const REJECTION_ADVICE = {
+    click: "Keep the mic away from taps and the keyboard while you speak.",
+    "no-voice": "Speak a little louder or closer to the mic.",
+    "too-short": "Say the whole word clearly, not clipped.",
+    "too-long": "Leave a short pause before and after the word, and say only the word."
+  };
+  const MAX_EXTRA_TAKES = 2;
+  // A take this much farther from the other two than they are from each
+  // other was probably said differently (or clipped): it is re-taken.
+  const OUTLIER_RATIO = 1.6;
   const ENGINE_STATE_TEXT = {
     listening: "Listening",
     suspended: "Listening (commands paused while this page records or tests)",
@@ -44,18 +55,101 @@
     return document.getElementById(id);
   }
 
+  // ---- Troubleshooting recording -----------------------------------------
+  // The raw audio of this page's recording and test sessions, with what the
+  // voice gate decided and when, kept in memory only (at most the last 3
+  // minutes) and saved to a file only when the user asks. It lets the
+  // recognizer be tuned against a real voice and room.
+  const debugRecorder = (() => {
+    const MAX_SAMPLES = 3 * 60 * VoiceFeatures.SAMPLE_RATE;
+    let chunks = [];
+    let total = 0;
+    let dropped = 0;
+    let events = [];
+
+    function toInt16(samples) {
+      const out = new Int16Array(samples.length);
+      for (let i = 0; i < samples.length; i += 1) {
+        out[i] = Math.max(-32768, Math.min(32767, Math.round(samples[i] * 32767)));
+      }
+      return out;
+    }
+
+    return {
+      add(samples) {
+        chunks.push(toInt16(samples));
+        total += samples.length;
+        while (total - dropped > MAX_SAMPLES && chunks.length > 1) {
+          dropped += chunks.shift().length;
+        }
+        events = events.filter((event) => event.atSample >= dropped);
+      },
+      // Called while the batch that finished the sound is being handled.
+      mark(kind, command, outcome, lengthSamples) {
+        events.push({ atSample: total, kind, command: command || null, outcome, lengthSamples: lengthSamples || null });
+      },
+      get seconds() {
+        return (total - dropped) / VoiceFeatures.SAMPLE_RATE;
+      },
+      build() {
+        const pcm = new Int16Array(total - dropped);
+        let offset = 0;
+        chunks.forEach((chunk) => {
+          pcm.set(chunk, offset);
+          offset += chunk.length;
+        });
+        let binary = "";
+        const bytes = new Uint8Array(pcm.buffer);
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        }
+        return {
+          kind: "scenemarks-voice-recording",
+          version: 1,
+          createdAt: new Date().toISOString(),
+          featureVersion: VOICE_FEATURE_VERSION,
+          sampleRate: VoiceFeatures.SAMPLE_RATE,
+          micLabel: capture.status.micLabel,
+          sensitivity: voiceSettings.sensitivity,
+          startSample: dropped,
+          events,
+          pcm16Base64: btoa(binary)
+        };
+      }
+    };
+  })();
+
+  function saveDebugRecording() {
+    if (!debugRecorder.seconds) {
+      byId("voiceCopyResult").textContent = "Nothing recorded yet: record or test some words on this page first.";
+      return;
+    }
+    const blob = new Blob([JSON.stringify(debugRecorder.build())], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `scenemarks-voice-recording-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    byId("voiceCopyResult").textContent = `Saved ${Math.round(debugRecorder.seconds)} s of recording to your Downloads folder.`;
+  }
+
   // ---- Shared capture for recording and testing ----------------------
   const capture = VoiceCapture.createCapture({
     getConfig: () => voiceSettings,
+    onAudio: (samples) => debugRecorder.add(samples),
     onUtterance: (utterance) => {
+      debugRecorder.mark(session ? session.kind : "idle", session && session.command, "word", utterance.samples.length);
       if (session && session.kind === "record") handleRecordedUtterance(utterance);
       else if (session && session.kind === "test") handleTestUtterance(utterance);
     },
     onRejected: (result) => {
+      debugRecorder.mark(session ? session.kind : "idle", session && session.command, result.rejected);
       if (!session) return;
-      const text = `${REJECTION_TEXT[result.rejected] || "Not a word"}. Say it again.`;
-      if (session.kind === "record") setTrainStatus(`${text} ${recordPrompt()}`, true);
-      else setTestResult(`${REJECTION_TEXT[result.rejected] || "Not a word"}: ignored.`, false);
+      const text = REJECTION_TEXT[result.rejected] || "ignored a sound";
+      if (session.kind === "record") handleRecordedRejection(result.rejected);
+      else setTestResult(`Not a word (${text}).`, false);
     },
     onStateChange: (status) => {
       if (status.state === "mic-error" && session) {
@@ -119,7 +213,8 @@
   function recordPrompt() {
     if (!session || session.kind !== "record") return "";
     const info = commandInfo(session.command);
-    return `Say your word for "${info.label}" (${session.samples.length + 1} of ${MAX_VOICE_SAMPLES}).`;
+    const take = Math.min(session.takes.length + 1, MAX_VOICE_SAMPLES);
+    return `Say "${info.say}" (or your own word) · take ${take} of ${MAX_VOICE_SAMPLES}`;
   }
 
   function setTrainStatus(text, isError) {
@@ -128,47 +223,111 @@
     node.classList.toggle("is-error", Boolean(isError));
   }
 
+  // The prompt, plus what just happened in a quieter second sentence.
+  function promptWith(note) {
+    setTrainStatus(note ? `${recordPrompt()} · ${note}` : recordPrompt(), false);
+  }
+
   function armSampleTimeout() {
     clearTimeout(session.timer);
     session.timer = setTimeout(() => {
       if (!session || session.kind !== "record") return;
-      setTrainStatus("Nothing heard. Check that the meter moves when you speak, then try again.", true);
+      setTrainStatus("Nothing heard for 10 seconds, so recording stopped. Check that the meter moves when you speak, then click Record again.", true);
       endSession();
     }, SAMPLE_TIMEOUT_MS);
   }
 
   async function startRecording(command) {
-    await beginSession({ kind: "record", command, samples: [], timer: null });
+    await beginSession({ kind: "record", command, takes: [], extraTakes: 0, rejections: [], timer: null });
     if (!session) return;
-    setTrainStatus(recordPrompt(), false);
+    promptWith("");
     armSampleTimeout();
     renderWords();
+  }
+
+  function handleRecordedRejection(reason) {
+    session.rejections.push(reason);
+    const recent = session.rejections.slice(-3);
+    const repeated = recent.length === 3 && recent.every((item) => item === reason);
+    promptWith(repeated
+      ? `${REJECTION_TEXT[reason]} three times. ${REJECTION_ADVICE[reason] || ""}`.trim()
+      : REJECTION_TEXT[reason] || "ignored a sound");
+  }
+
+  // Mean DTW distance of each take to the others; the take that sits far
+  // from a consistent pair is the odd one out.
+  function findOutlier(takes) {
+    if (takes.length < 3) return -1;
+    const prepared = takes.map((take) => VoiceFeatures.withDeltas(take));
+    const distance = (i, j) => VoiceFeatures.dtwDistance(prepared[i], prepared[j]);
+    const pairs = [[0, 1], [0, 2], [1, 2]].map(([i, j]) => ({ i, j, d: distance(i, j) }));
+    let worst = -1;
+    let worstRatio = 0;
+    for (let k = 0; k < 3; k += 1) {
+      const others = pairs.find((pair) => pair.i !== k && pair.j !== k);
+      const own = pairs.filter((pair) => pair.i === k || pair.j === k).map((pair) => pair.d);
+      const mean = (own[0] + own[1]) / 2;
+      const ratio = Number.isFinite(mean) ? mean / Math.max(others.d, 1e-6) : Infinity;
+      if (ratio > worstRatio) {
+        worstRatio = ratio;
+        worst = k;
+      }
+    }
+    return worstRatio >= OUTLIER_RATIO ? worst : -1;
+  }
+
+  // The words already saved, plus this one, checked the way the engine
+  // will see them: which of the new word's takes would be mistaken.
+  function confusionFor(command, takes) {
+    const usable = profile.featureVersion === VOICE_FEATURE_VERSION ? profile.commands : {};
+    const candidate = VoiceFeatures.prepareLibrary({ commands: { ...usable, [command]: takes } });
+    const candidateCalibration = VoiceFeatures.calibrate(candidate);
+    if (!candidateCalibration) return null;
+    return VoiceFeatures.evaluateProfile(candidate, candidateCalibration, voiceSettings.sensitivity)
+      .find((entry) => entry.command === command) || null;
   }
 
   async function handleRecordedUtterance(utterance) {
     const features = VoiceFeatures.extractFeatures(utterance.samples);
     if (!features) {
-      setTrainStatus(`That was too quiet. ${recordPrompt()}`, true);
+      handleRecordedRejection("no-voice");
       return;
     }
-    session.samples.push(features);
-    if (session.samples.length < MAX_VOICE_SAMPLES) {
-      setTrainStatus(`Got it. ${recordPrompt()}`, false);
-      armSampleTimeout();
+    session.takes.push(features);
+    session.rejections = [];
+    armSampleTimeout();
+    renderWords();
+    if (session.takes.length < MAX_VOICE_SAMPLES) {
+      promptWith(`take ${session.takes.length} done`);
       return;
     }
 
-    const { command, samples } = session;
+    const outlier = findOutlier(session.takes);
+    if (outlier >= 0 && session.extraTakes < MAX_EXTRA_TAKES) {
+      session.takes.splice(outlier, 1);
+      session.extraTakes += 1;
+      renderWords();
+      promptWith(`take ${outlier + 1} sounded different from the other two; say it once more, the same way`);
+      return;
+    }
+
+    const { command, takes } = session;
     endSession();
     setTrainStatus("Saving…", false);
     try {
-      const result = await Storage.saveVoiceSamples(command, samples);
+      const result = await Storage.saveVoiceSamples(command, takes);
       if (!result.ok) throw new Error(result.error);
       await loadProfile();
-      const check = qualityFor(command);
-      setTrainStatus(check && check.recognized < check.total
-        ? `Saved "${commandInfo(command).label}". ${qualityText(check)}`
-        : `Saved "${commandInfo(command).label}".`, Boolean(check && check.recognized < check.total));
+      const check = qualityFor(command) || confusionFor(command, takes);
+      const label = `"${commandInfo(command).say}"`;
+      if (check && check.confusedWith.length) {
+        const others = check.confusedWith.map((id) => `"${commandInfo(id).say}"`).join(" and ");
+        setTrainStatus(`Saved ${label}, but it sounds a lot like ${others}. Record one of them again, saying each word distinctly, or pick a more different word.`, true);
+      } else if (check && check.recognized < check.total) {
+        setTrainStatus(`Saved ${label}. ${qualityText(check)}`, true);
+      } else {
+        setTrainStatus(`Saved ${label}. All ${takes.length} takes are recognized.`, false);
+      }
     } catch (error) {
       setTrainStatus(`Saving failed: ${error.message}`, true);
     }
@@ -228,7 +387,8 @@
       detail.className = "voice-word__detail";
       const check = qualityFor(info.id);
       if (recording) {
-        detail.textContent = `Recording… ${session.samples.length} of ${MAX_VOICE_SAMPLES}`;
+        const marks = Array.from({ length: MAX_VOICE_SAMPLES }, (_, i) => (i < session.takes.length ? "✓" : "○"));
+        detail.textContent = `Recording: takes ${marks.join(" ")}${session.extraTakes ? ` (re-take ${session.extraTakes})` : ""}`;
       } else if (!samples) {
         detail.textContent = "Not recorded";
       } else if (stale) {
@@ -520,6 +680,7 @@
     byId("voiceClearAllButton").addEventListener("click", () => clearWord(null));
     byId("voiceTestButton").addEventListener("click", toggleTest);
     byId("voiceCopyButton").addEventListener("click", copyReport);
+    byId("voiceSaveRecordingButton").addEventListener("click", saveDebugRecording);
     byId("voiceResetButton").addEventListener("click", () => {
       channel.postMessage({ command: "reset-counters" });
       byId("voiceCopyResult").textContent = "Counters reset.";

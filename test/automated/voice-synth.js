@@ -104,4 +104,19 @@ function synthWord(name, { speed = 1, f0 = 120, level = 1, noise = 0.002, seed =
   return Float32Array.from([...pad(), ...out, ...pad()]);
 }
 
-module.exports = { SR, TAKES, WORDS, createRandom, loadVoiceFeatures, synthWord };
+// A word as the extension sees it: room tone around it, through the VAD,
+// as the utterance the VAD hands over. Training and live listening both go
+// through this path, so templates should too.
+function vadUtterance(VoiceFeatures, word, take = {}, seed = 17) {
+  const random = createRandom(seed);
+  const quiet = (ms) => Array.from({ length: ms * 16 }, () => random() * 0.0004);
+  const audio = Float32Array.from([...quiet(1500), ...synthWord(word, take), ...quiet(900)]);
+  const vad = VoiceFeatures.createVad();
+  for (let start = 0; start + 160 <= audio.length; start += 160) {
+    const result = vad.push(audio.slice(start, start + 160));
+    if (result && result.frames) return VoiceFeatures.concatFrames(result.frames);
+  }
+  return null;
+}
+
+module.exports = { SR, TAKES, WORDS, createRandom, loadVoiceFeatures, synthWord, vadUtterance };

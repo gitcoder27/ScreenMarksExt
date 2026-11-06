@@ -119,12 +119,14 @@
   function createVad(options = {}) {
     const startDb = options.startDb ?? 12; // above floor to open
     const stopDb = options.stopDb ?? 6; // within this of the floor is quiet
-    const dropDb = options.dropDb ?? 30; // this far below the peak is quiet
+    // A trailing "s" or "t" can sit 30+ dB below the vowel; it must not
+    // count as quiet, or the word loses the sound that tells it apart.
+    const dropDb = options.dropDb ?? 40; // this far below the peak is quiet
     const minFloorDb = options.minFloorDb ?? -75;
     const hangoverFrames = options.hangoverFrames ?? 25; // 250 ms of quiet closes
-    const minFrames = options.minFrames ?? 20; // 200 ms
+    const minFrames = options.minFrames ?? 15; // 150 ms ("back" said crisply)
     const maxFrames = options.maxFrames ?? 150; // 1.5 s
-    const preRollFrames = options.preRollFrames ?? 10; // keep 100 ms before onset
+    const preRollFrames = options.preRollFrames ?? 15; // keep 150 ms before onset (a soft "s" or "p")
     const relearnFrames = options.relearnFrames ?? 50; // quietest of the last 0.5 s
     const sustainDb = options.sustainDb ?? 12; // "near the peak"
     const minSustainFrames = options.minSustainFrames ?? 8; // 80 ms near the peak
@@ -199,8 +201,9 @@
       const struck = strikes > maxStrikes
         || (peakDb - beforePeak >= attackDb && isSteadyDecay(tail, decayDbPerFrame));
       const pitched = pitchFrames;
-      // Keep 50 ms of the quiet tail.
-      const kept = frames.slice(0, frames.length - Math.max(0, silentRun - 5));
+      // Keep 150 ms of the quiet tail: a fading consonant lives there, and
+      // feature extraction trims true silence itself.
+      const kept = frames.slice(0, frames.length - Math.max(0, silentRun - 15));
       close();
       const stats = { voicedFrames: voiced, sustainedFrames: sustained, pitchFrames: pitched, peakFrame: peakIndex, strikes };
       if (voiced < minFrames) {
@@ -289,7 +292,12 @@
   const MEL_HIGH_HZ = 7600;
   const COEFFS = 13;
   const PRE_EMPHASIS = 0.97;
-  const TRIM_DB = 25; // frames this far below the loudest are edge silence
+  // Edge frames are silence when within TRIM_FLOOR_DB of the utterance's
+  // own room tone (its quietest frames: the VAD's pre-roll and tail), or
+  // more than TRIM_PEAK_DB below its loudest frame. Relative to the room,
+  // not just the peak, so a soft trailing consonant survives.
+  const TRIM_FLOOR_DB = 10;
+  const TRIM_PEAK_DB = 40;
   const C0_WEIGHT = 0.5; // c0 is loudness; keep its contour but damp it
   const MAX_TEMPLATE_FRAMES = 150;
 
@@ -451,9 +459,12 @@
 
     // Trim edge silence (the VAD's pre-roll and tail), keeping one frame.
     const peak = Math.max(...energiesDb);
-    let first = energiesDb.findIndex((db) => db >= peak - TRIM_DB);
+    const sorted = energiesDb.slice().sort((a, b) => a - b);
+    const roomDb = sorted[Math.floor(sorted.length * 0.1)];
+    const silenceDb = Math.max(roomDb + TRIM_FLOOR_DB, peak - TRIM_PEAK_DB);
+    let first = energiesDb.findIndex((db) => db >= silenceDb);
     let last = energiesDb.length - 1;
-    while (last > first && energiesDb[last] < peak - TRIM_DB) last -= 1;
+    while (last > first && energiesDb[last] < silenceDb) last -= 1;
     first = Math.max(0, first - 1);
     last = Math.min(energiesDb.length - 1, last + 1, first + MAX_TEMPLATE_FRAMES - 1);
     const kept = coefficients.slice(first, last + 1);

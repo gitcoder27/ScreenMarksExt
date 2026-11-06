@@ -5,7 +5,7 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { createWorkflow, flush } = require("./workflow-helpers");
-const { TAKES, createRandom, synthWord } = require("./voice-synth");
+const { TAKES, createRandom, loadVoiceFeatures, synthWord, vadUtterance } = require("./voice-synth");
 
 function installVoiceBrowser(work) {
   const channels = [];
@@ -128,7 +128,7 @@ test("options test mode reports the heard word without running anything", async 
   const Storage = work.context.SceneMarks.Storage;
   const VoiceFeatures = work.context.SceneMarks.VoiceFeatures;
   for (const word of ["next", "back", "skip"]) {
-    await Storage.saveVoiceSamples(word, [0, 1, 2].map((take) => VoiceFeatures.extractFeatures(synthWord(word, TAKES[take]))));
+    await Storage.saveVoiceSamples(word, [0, 1, 2].map((take) => VoiceFeatures.extractFeatures(vadUtterance(VoiceFeatures, word, TAKES[take]))));
   }
   for (const listener of work.changed) listener({ voiceProfile: { newValue: {} } }, "local");
   await settle();
@@ -176,4 +176,81 @@ test("popup voice row turns voice on and shows what the engine reports", async (
 
   engine.postMessage({ kind: "engine-status", at: Date.now(), state: "mic-error", capture: { errorName: "NotAllowedError" } });
   assert.equal(work.get("voiceStatusLabel").textContent, "Mic blocked");
+});
+
+function recordButtonFor(work, index) {
+  const row = work.get("voiceWordList").children[index];
+  return row.children.find((node) => node.className === "voice-word__actions").children[0];
+}
+
+test("a take that sounds different from the other two is re-taken before saving", async () => {
+  const work = await loadOptionsVoice();
+  await recordButtonFor(work, 0).emit("click"); // next
+  await settle();
+  work.mic.say("next", 0);
+  await settle();
+  work.mic.say("next", 1);
+  await settle();
+  work.mic.say("pause", 2); // A slip: the wrong word.
+  await settle();
+  assert.match(work.get("voiceTrainStatus").textContent, /take 3 sounded different/);
+  assert.equal(work.messages.filter((message) => message.type === "SCENEMARKS_STORAGE_RPC").length, 0);
+
+  work.mic.say("next", 2);
+  await settle();
+  await settle();
+  const saved = (await work.context.SceneMarks.Storage.getVoiceProfile()).commands.next;
+  assert.equal(saved.length, 3);
+  assert.match(work.get("voiceTrainStatus").textContent, /Saved "next"/);
+});
+
+test("ignored sounds keep the prompt and advise only when they repeat", async () => {
+  const work = await loadOptionsVoice();
+  await recordButtonFor(work, 2).emit("click"); // pause
+  await settle();
+  const rejectedTap = () => {
+    // A struck, ringing tap: what a finger on the laptop sounds like.
+    const random = createRandom(3);
+    const tap = Float32Array.from({ length: 600 * 16 }, (_, i) => 0.8 * (random() * Math.exp(-i / 80)
+      + 0.3 * Math.sin((2 * Math.PI * 1500 * i) / 16000) * Math.exp(-i / 1920)));
+    const quiet = Float32Array.from({ length: 1200 * 16 }, () => random() * 0.0004);
+    const audio = new Float32Array([...quiet, ...tap, ...quiet]);
+    for (let start = 0; start + 1600 <= audio.length; start += 1600) work.mic.node.port.onmessage({ data: audio.slice(start, start + 1600) });
+  };
+  rejectedTap();
+  await settle();
+  const status = work.get("voiceTrainStatus");
+  assert.equal(status.textContent, 'Say "pause" (or your own word) · take 1 of 3 · ignored a tap or click');
+  assert.equal(status.classList.contains ? status.classList.contains("is-error") : false, false);
+  rejectedTap();
+  rejectedTap();
+  await settle();
+  assert.match(status.textContent, /three times\. Keep the mic away from taps/);
+});
+
+test("the troubleshooting recording holds the session audio and the gate's decisions", async () => {
+  const work = await loadOptionsVoice();
+  const downloads = [];
+  work.context.Blob = class { constructor(parts) { this.text = parts.join(""); } };
+  work.context.URL = { createObjectURL: (blob) => { downloads.push(blob.text); return "blob:x"; }, revokeObjectURL() {} };
+  work.context.btoa = (binary) => Buffer.from(binary, "binary").toString("base64");
+  work.document.body.append = () => {};
+  work.context.document.createElement = (tag) => {
+    const element = new (require("./workflow-helpers").FakeElement)(tag);
+    element.click = () => {};
+    return element;
+  };
+
+  await recordButtonFor(work, 0).emit("click");
+  await settle();
+  work.mic.say("next", 0);
+  await settle();
+  await work.get("voiceSaveRecordingButton").emit("click");
+  assert.equal(downloads.length, 1);
+  const file = JSON.parse(downloads[0]);
+  assert.equal(file.kind, "scenemarks-voice-recording");
+  assert.equal(file.sampleRate, 16000);
+  const seconds = Buffer.from(file.pcm16Base64, "base64").length / 2 / 16000;
+  assert.ok(seconds > 2 && seconds < 4, String(seconds));
+  assert.deepEqual(file.events.map((event) => [event.kind, event.command, event.outcome]), [["record", "next", "word"]]);
 });

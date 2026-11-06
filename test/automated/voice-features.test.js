@@ -129,14 +129,17 @@ test("periodicity is high for a voice pitch and low for noise", () => {
 test("the VAD splits spoken words into separate utterances", () => {
   const results = runVad(voice(350), voice(300, { f0: 220, level: 0.3 }), voice(250, { f0: 90, formant: 500 }), plosiveWord());
   assert.equal(results.length, 4, String(results));
-  assertWord(results[0], 350, 550);
-  assertWord(results[1], 300, 500);
-  assertWord(results[2], 250, 450);
-  assertWord(results[3], 300, 500);
+  // Each utterance holds the word plus up to 150 ms of lead-in and tail.
+  assertWord(results[0], 350, 700);
+  assertWord(results[1], 300, 650);
+  assertWord(results[2], 250, 600);
+  assertWord(results[3], 300, 700);
 });
 
 test("taps on the laptop are rejected, even when the case rings", () => {
-  assert.deepEqual(runVad(tap({ ringMs: 30 }), tap({ ringMs: 50, ringHz: 200 })), ["too-short", "too-short"]);
+  for (const result of runVad(tap({ ringMs: 30 }), tap({ ringMs: 50, ringHz: 200 }))) {
+    assert.ok(["too-short", "click"].includes(result), String(result));
+  }
   // Long rings last as long as a word and are pitched, but are struck.
   assert.deepEqual(runVad(tap({ ringMs: 80 }), tap({ ringMs: 120 }), tap({ ringMs: 120, ringHz: 200 })),
     ["click", "click", "click"]);
@@ -162,7 +165,7 @@ test("the VAD closes when auto-gain lifts the room noise after a word", () => {
   const raised = () => Float32Array.from({ length: 3000 * 16 }, (_, i) => 0.0005 * Math.sin(i * 0.3));
   const results = runVad(concat([quiet(500, 0.00002), voice(400, { level: 2 }), raised(), voice(400, { level: 2 }), raised()]));
   assert.equal(results.length, 2, String(results));
-  results.forEach((result) => assertWord(result, 400, 650));
+  results.forEach((result) => assertWord(result, 400, 800));
 });
 
 test("a steady noise is cut off once, then words over it are still heard", () => {
@@ -170,11 +173,11 @@ test("a steady noise is cut off once, then words over it are still heard", () =>
   const results = runVad(concat([hum(6000), concat([voice(400, { level: 3 })]).map((v, i) => v + 0.003 * Math.sin(i * 0.3)), hum(1000)]));
   assert.equal(results[0], "too-long");
   assert.equal(results.length, 2, String(results));
-  assertWord(results[1], 400, 650);
+  assertWord(results[1], 400, 800);
 });
 
 // ---- MFCC, DTW and matching -------------------------------------------
-const { TAKES, synthWord } = require("./voice-synth");
+const { TAKES, synthWord, vadUtterance } = require("./voice-synth");
 const COMMANDS = ["next", "back", "pause", "play", "mark", "skip", "return", "random"];
 
 function features(word, take = 0) {
@@ -302,20 +305,28 @@ test("calibration needs two takes of a word; the profile check flags weak words"
   assert.ok(mark.confusedWith.includes("back"));
 });
 
-test("a VAD utterance feeds straight into feature extraction", () => {
-  const vad = VoiceFeatures.createVad();
-  const audio = concat([quiet(1500), synthWord("return"), quiet(800)]);
-  let utterance = null;
-  for (let start = 0; start + FRAME <= audio.length; start += FRAME) {
-    const result = vad.push(audio.slice(start, start + FRAME));
-    if (result && result.frames) utterance = result;
+test("templates and live words recorded through the VAD match each other", () => {
+  const commands = {};
+  for (const word of COMMANDS) {
+    commands[word] = [0, 1, 2].map((take) => VoiceFeatures.extractFeatures(vadUtterance(VoiceFeatures, word, TAKES[take])));
   }
-  assert.ok(utterance, "the VAD found the word");
-  const fromVad = VoiceFeatures.extractFeatures(VoiceFeatures.concatFrames(utterance.frames));
-  const { library, calibration } = trainedLibrary();
-  const result = VoiceFeatures.match(VoiceFeatures.withDeltas(fromVad), library, calibration, 0.5);
-  assert.equal(result.command, "return");
-  assert.equal(result.accepted, true);
+  const library = VoiceFeatures.prepareLibrary({ commands });
+  const calibration = VoiceFeatures.calibrate(library);
+  for (const word of COMMANDS) {
+    for (const take of [3, 4]) {
+      const live = VoiceFeatures.extractFeatures(vadUtterance(VoiceFeatures, word, TAKES[take], 99));
+      const result = VoiceFeatures.match(VoiceFeatures.withDeltas(live), library, calibration, 0.5);
+      assert.equal(result.accepted, true, `${word} take ${take}: ${result.reason} (${result.command})`);
+      assert.equal(result.command, word);
+    }
+  }
+});
+
+test("trimming keeps a soft trailing consonant", () => {
+  // "pause" ends in an unvoiced "s" about 30 dB below its vowel.
+  const pause = VoiceFeatures.extractFeatures(vadUtterance(VoiceFeatures, "pause"));
+  const paw = VoiceFeatures.extractFeatures(vadUtterance(VoiceFeatures, "pause").subarray(0, Math.round((150 + 50 + 220) * 16)));
+  assert.ok(pause.frames >= paw.frames + 8, `${pause.frames} vs ${paw.frames}`);
 });
 
 test("every take of every command word passes the VAD, including sharp plosive onsets", () => {
