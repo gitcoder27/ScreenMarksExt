@@ -312,6 +312,10 @@ h3 {
   color: #fca5a5;
 }
 
+.voice-teach .hint {
+  flex-basis: 100%;
+}
+
 .voice-word-list {
   display: grid;
   gap: 6px;

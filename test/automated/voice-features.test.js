@@ -168,6 +168,29 @@ test("the VAD closes when auto-gain lifts the room noise after a word", () => {
   results.forEach((result) => assertWord(result, 400, 800));
 });
 
+test("a word ends in a room whose noise flickers above its quietest moments", () => {
+  // Real room noise is not steady: 10 ms frames wander a few dB. The floor
+  // is the room's typical level, so the noise after a word counts as quiet.
+  const room = (ms) => {
+    const out = new Float32Array(ms * 16);
+    for (let frame = 0; frame < ms / 10; frame += 1) {
+      const level = 0.004 * (0.6 + (random() + 0.5) * 1.2);
+      for (let i = 0; i < FRAME; i += 1) out[frame * FRAME + i] = random() * level;
+    }
+    return out;
+  };
+  const word = voice(400, { level: 3 }).map((value, i) => value + random() * 0.004);
+  const vad = VoiceFeatures.createVad();
+  const audio = concat([room(2000), word, room(1500), word, room(1500)]);
+  const results = [];
+  for (let start = 0; start + FRAME <= audio.length; start += FRAME) {
+    const result = vad.push(audio.slice(start, start + FRAME));
+    if (result) results.push(result.frames ? result.frames.length * 10 : result.rejected);
+  }
+  assert.equal(results.length, 2, String(results));
+  results.forEach((result) => assertWord(result, 400, 800));
+});
+
 test("a steady noise is cut off once, then words over it are still heard", () => {
   const hum = (ms) => Float32Array.from({ length: ms * 16 }, (_, i) => 0.003 * Math.sin(i * 0.3) + random() * 0.002);
   const results = runVad(concat([hum(6000), concat([voice(400, { level: 3 })]).map((v, i) => v + 0.003 * Math.sin(i * 0.3)), hum(1000)]));

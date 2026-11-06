@@ -133,7 +133,11 @@
     Object.freeze({ id: "random", say: "random", label: "Open a random saved video" })
   ]);
   const MAX_VOICE_MIC_FIELD_LENGTH = 300;
-  const MAX_VOICE_SAMPLES = 3;
+  // A word is recorded as VOICE_RECORD_TAKES takes; testing on the options
+  // page can add takes of the user's real, casual voice up to
+  // MAX_VOICE_SAMPLES (the recorded takes come first and are kept).
+  const VOICE_RECORD_TAKES = 3;
+  const MAX_VOICE_SAMPLES = 6;
   // 13 MFCCs per 10 ms frame; a template holds at most 1.5 s of speech.
   const VOICE_MFCC_COEFFS = 13;
   const MAX_VOICE_TEMPLATE_FRAMES = 150;
@@ -141,7 +145,9 @@
   // another version no longer match and must be recorded again.
   // 2: raw mic audio (no browser noise suppression or auto-gain) and
   // floor-relative trimming that keeps soft consonants.
-  const VOICE_FEATURE_VERSION = 2;
+  // 3: a 30 dB band floor and per-utterance variance normalization, so a
+  // word said softly matches a take said at full voice.
+  const VOICE_FEATURE_VERSION = 3;
   const VOICE_COOLDOWN_MS = 700;
   const VOICE_AUTO_OFF_CHOICES = Object.freeze([0, 15, 30, 60, 120]);
 
@@ -173,6 +179,7 @@
     VOICE_COMMANDS,
     VOICE_COOLDOWN_MS,
     VOICE_FEATURE_VERSION,
+    VOICE_RECORD_TAKES,
     VOICE_MFCC_COEFFS,
     VOICE_STATUS_CHANNEL
   };

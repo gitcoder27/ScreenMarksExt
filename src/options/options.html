@@ -163,7 +163,7 @@
 
           <div class="voice-step">
             <h3>2. Record your words</h3>
-            <p class="hint">Record each word 3 times, the way you will say it while watching. Any word in any language works; short words that sound clearly different (like "skip" and "next") are told apart best. You only need the commands you will use.</p>
+            <p class="hint">Record each word 3 times, as asked: in your normal voice, a little softer, and quickly. Takes that vary like real use are what let you speak casually later, without raising your voice. Any word in any language works; short words that sound clearly different (like "skip" and "next") are told apart best. You only need the commands you will use.</p>
             <div class="voice-meter" aria-hidden="true"><div id="voiceMeterFill" class="voice-meter__fill"></div></div>
             <p id="voiceTrainStatus" class="voice-train-status" role="status"></p>
             <ul id="voiceWordList" class="voice-word-list"></ul>
@@ -174,11 +174,12 @@
 
           <div class="voice-step">
             <h3>3. Test</h3>
-            <p class="hint">Say your words and see what SceneMarks hears. Nothing runs while the test is on.</p>
+            <p class="hint">Say your words and see what SceneMarks hears. Nothing runs while the test is on. If a word is missed or mistaken, click the word you said to add that try to it: SceneMarks learns how you really say it (up to 3 extra takes per word).</p>
             <div class="voice-row">
               <button id="voiceTestButton" class="secondary-button" type="button">Start Test</button>
             </div>
             <p id="voiceTestResult" class="voice-test-result" role="status"></p>
+            <div id="voiceTestTeach" class="voice-row voice-teach"></div>
             <label for="voiceSensitivity">
               Sensitivity
               <input id="voiceSensitivity" type="range" min="0" max="1" step="0.05">

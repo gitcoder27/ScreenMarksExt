@@ -7,7 +7,7 @@
 // switch tabs. Templates are saved through the worker (single writer).
 (function initializeVoiceOptions() {
   const { Constants, VoiceFeatures, VoiceCapture } = SceneMarks;
-  const { MAX_VOICE_SAMPLES, VOICE_COMMANDS, VOICE_FEATURE_VERSION, VOICE_STATUS_CHANNEL, STORAGE_KEYS } = Constants;
+  const { VOICE_COMMANDS, VOICE_FEATURE_VERSION, VOICE_RECORD_TAKES, VOICE_STATUS_CHANNEL, STORAGE_KEYS } = Constants;
   const Storage = SceneMarks.Storage.createClient();
   const SUSPEND_MS = 4000;
   const SAMPLE_TIMEOUT_MS = 10000;
@@ -25,10 +25,20 @@
     "too-short": "Say the whole word clearly, not clipped.",
     "too-long": "Leave a short pause before and after the word, and say only the word."
   };
+  // Each take asks for a different way of saying the word. Takes that vary
+  // the way real use does are what lets a casual, softer word be
+  // recognized later: three identical careful takes teach the matcher
+  // only the careful version.
+  const TAKE_STYLES = [
+    "in your normal voice",
+    "a little softer, the way you would while watching",
+    "quickly, the way you would really say it"
+  ];
   const MAX_EXTRA_TAKES = 2;
   // A take this much farther from the other two than they are from each
-  // other was probably said differently (or clipped): it is re-taken.
-  const OUTLIER_RATIO = 1.6;
+  // other was probably a different word or clipped: it is re-taken. Loose
+  // enough that a softer or quicker take of the same word passes.
+  const OUTLIER_RATIO = 2;
   const ENGINE_STATE_TEXT = {
     listening: "Listening",
     suspended: "Listening (commands paused while this page records or tests)",
@@ -47,7 +57,8 @@
   let channel = null;
   let engineStatus = null;
   let suspendTimer = null;
-  let session = null; // { kind: "record", command, samples, timer } | { kind: "test" }
+  let session = null; // { kind: "record", command, takes, ... } | { kind: "test" }
+  let lastTestFeatures = null; // the last word heard in a test, which the user can add to a word
   let meterTimer = null;
   let pageMicLine = "";
 
@@ -213,8 +224,8 @@
   function recordPrompt() {
     if (!session || session.kind !== "record") return "";
     const info = commandInfo(session.command);
-    const take = Math.min(session.takes.length + 1, MAX_VOICE_SAMPLES);
-    return `Say "${info.say}" (or your own word) · take ${take} of ${MAX_VOICE_SAMPLES}`;
+    const take = Math.min(session.takes.length + 1, VOICE_RECORD_TAKES);
+    return `Say "${info.say}" (or your own word) ${TAKE_STYLES[take - 1]} · take ${take} of ${VOICE_RECORD_TAKES}`;
   }
 
   function setTrainStatus(text, isError) {
@@ -297,7 +308,7 @@
     session.rejections = [];
     armSampleTimeout();
     renderWords();
-    if (session.takes.length < MAX_VOICE_SAMPLES) {
+    if (session.takes.length < VOICE_RECORD_TAKES) {
       promptWith(`take ${session.takes.length} done`);
       return;
     }
@@ -307,7 +318,7 @@
       session.takes.splice(outlier, 1);
       session.extraTakes += 1;
       renderWords();
-      promptWith(`take ${outlier + 1} sounded different from the other two; say it once more, the same way`);
+      promptWith(`take ${outlier + 1} did not sound like the same word as the other two; say it once more`);
       return;
     }
 
@@ -354,6 +365,7 @@
   function qualityText(entry) {
     if (!entry) return "";
     if (entry.recognized === entry.total) return `Recognized ${entry.recognized} of ${entry.total} takes.`;
+    // Takes added from tests are casual ones; a miss among them is expected.
     const confused = entry.confusedWith.map((id) => `"${commandInfo(id).say}"`).join(", ");
     return confused
       ? `Recognized ${entry.recognized} of ${entry.total} takes; sounds like ${confused}. Try a more different word or record again.`
@@ -387,7 +399,7 @@
       detail.className = "voice-word__detail";
       const check = qualityFor(info.id);
       if (recording) {
-        const marks = Array.from({ length: MAX_VOICE_SAMPLES }, (_, i) => (i < session.takes.length ? "✓" : "○"));
+        const marks = Array.from({ length: VOICE_RECORD_TAKES }, (_, i) => (i < session.takes.length ? "✓" : "○"));
         detail.textContent = `Recording: takes ${marks.join(" ")}${session.extraTakes ? ` (re-take ${session.extraTakes})` : ""}`;
       } else if (!samples) {
         detail.textContent = "Not recorded";
@@ -398,7 +410,7 @@
         detail.textContent = qualityText(check);
         detail.classList.add(check.recognized === check.total ? "is-good" : "is-warning");
       } else {
-        detail.textContent = `${samples} of ${MAX_VOICE_SAMPLES} takes recorded`;
+        detail.textContent = `${samples} takes recorded`;
       }
 
       const actions = document.createElement("span");
@@ -438,14 +450,52 @@
     node.classList.toggle("is-error", Boolean(isError));
   }
 
+  // After each word heard in a test: "Wrong or missed? It was: [Next]
+  // [Back] ...". The click adds that very utterance as a take of the chosen
+  // word, which teaches the matcher how the user really says it.
+  function renderTeach() {
+    const box = byId("voiceTestTeach");
+    box.replaceChildren();
+    if (!lastTestFeatures || !session || session.kind !== "test") return;
+    const label = document.createElement("span");
+    label.className = "hint";
+    label.textContent = "Wrong or missed? Add it to the word you said:";
+    box.append(label);
+    library.forEach(({ command }) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary-button";
+      button.textContent = commandInfo(command).say;
+      button.addEventListener("click", () => teach(command));
+      box.append(button);
+    });
+  }
+
+  async function teach(command) {
+    const features = lastTestFeatures;
+    lastTestFeatures = null;
+    renderTeach();
+    if (!features) return;
+    try {
+      const result = await Storage.addVoiceSample(command, features);
+      if (!result.ok) throw new Error(result.error);
+      await loadProfile();
+      setTestResult(`Added to "${commandInfo(command).say}" (${result.sampleCount} takes). Say it again to check.`, false);
+    } catch (error) {
+      setTestResult(`Adding failed: ${error.message}`, true);
+    }
+  }
+
   async function toggleTest() {
     if (session && session.kind === "test") {
       endSession();
+      lastTestFeatures = null;
+      renderTeach();
       setTestResult("Test stopped.", false);
       return;
     }
     if (!library.length || !calibration) {
-      setTestResult("Record at least one word (3 takes) first.", true);
+      setTestResult(`Record at least one word (${VOICE_RECORD_TAKES} takes) first.`, true);
       return;
     }
     await beginSession({ kind: "test" });
@@ -460,6 +510,8 @@
       setTestResult("Too quiet: ignored.", false);
       return;
     }
+    lastTestFeatures = features;
+    renderTeach();
     const result = VoiceFeatures.match(VoiceFeatures.withDeltas(features), library, calibration, voiceSettings.sensitivity);
     const nearest = result.command ? `"${commandInfo(result.command).say}"` : "nothing";
     const score = `distance ${result.distance.toFixed(2)}, limit ${result.threshold.toFixed(2)}`;

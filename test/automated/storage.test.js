@@ -706,6 +706,27 @@ test("saveVoiceSamples drops templates recorded with another feature version", a
   assert.deepEqual(Object.keys(profile.commands), ["next"]);
 });
 
+test("addVoiceSample appends one take, keeps the recorded takes when full, and needs a recorded word", async () => {
+  const { MAX_VOICE_SAMPLES, VOICE_RECORD_TAKES } = SceneMarks.Constants;
+  assert.deepEqual(await Storage.addVoiceSample("next", voiceTemplate(9)), { ok: false, error: "Record this word first." });
+  assert.equal(store.raw("voiceProfile"), undefined);
+  assert.equal((await Storage.addVoiceSample("dance", voiceTemplate(9))).ok, false);
+
+  await Storage.saveVoiceSamples("next", [voiceTemplate(1), voiceTemplate(2), voiceTemplate(3)]);
+  await Storage.saveVoiceSamples("back", [voiceTemplate(4)]);
+  const before = store.writeLog.length;
+  for (let frames = 10; frames < 10 + MAX_VOICE_SAMPLES; frames += 1) {
+    await Storage.addVoiceSample("next", voiceTemplate(frames));
+  }
+  assert.ok(store.writeLog.slice(before).every((entry) => entry.set.join() === "voiceProfile" && !entry.remove.length));
+  const profile = await Storage.getVoiceProfile();
+  assert.equal(profile.commands.next.length, MAX_VOICE_SAMPLES);
+  // The recorded takes stay; the oldest added takes made room.
+  assert.deepEqual(profile.commands.next.map((sample) => sample.frames), [1, 2, 3, 13, 14, 15].slice(0, MAX_VOICE_SAMPLES));
+  assert.equal(VOICE_RECORD_TAKES, 3);
+  assert.deepEqual(profile.commands.back.map((sample) => sample.frames), [4]);
+});
+
 test("clearVoiceProfile clears one command or the whole key, and skips no-op writes", async () => {
   await Storage.saveVoiceSamples("next", [voiceTemplate(4)]);
   await Storage.saveVoiceSamples("back", [voiceTemplate(4)]);

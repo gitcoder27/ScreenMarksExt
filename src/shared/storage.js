@@ -877,6 +877,42 @@
     return { ok: true, sampleCount: incoming.length };
   }
 
+  // Adds one take to a recorded command (testing on the options page: "that
+  // was 'next'"). Decided inside the write queue, so it cannot lose a
+  // concurrent change. When the command is full, the oldest added take
+  // goes; the recorded takes stay.
+  async function addVoiceSample(command, sample) {
+    if (!knownVoiceCommand(command)) {
+      return { ok: false, error: "Unknown voice command." };
+    }
+    const { MAX_VOICE_SAMPLES, VOICE_FEATURE_VERSION, VOICE_RECORD_TAKES } = SceneMarks.Constants;
+    const incoming = normalizeVoiceProfile({
+      featureVersion: VOICE_FEATURE_VERSION,
+      commands: { [command]: [sample] }
+    }).commands[command];
+    if (!incoming) {
+      return { ok: false, error: "No usable voice sample." };
+    }
+
+    let result = { ok: false, error: "Record this word first." };
+    await updateRawKeys(async (get) => {
+      const raw = await get([STORAGE_KEYS.VOICE_PROFILE]);
+      const current = normalizeVoiceProfile(raw[STORAGE_KEYS.VOICE_PROFILE]);
+      const existing = current.featureVersion === VOICE_FEATURE_VERSION ? current.commands[command] : null;
+      if (!existing || !existing.length) {
+        return SKIP_WRITE;
+      }
+      const samples = existing.length >= MAX_VOICE_SAMPLES
+        ? [...existing.slice(0, VOICE_RECORD_TAKES), ...existing.slice(VOICE_RECORD_TAKES + 1)]
+        : existing.slice();
+      samples.push(incoming[0]);
+      current.commands[command] = samples;
+      result = { ok: true, sampleCount: samples.length };
+      return { set: { [STORAGE_KEYS.VOICE_PROFILE]: current } };
+    });
+    return result;
+  }
+
   // Clears one command, or every command when command is null.
   async function clearVoiceProfile(command) {
     if (command !== null && command !== undefined && !knownVoiceCommand(command)) {
@@ -932,6 +968,7 @@
     "toggleFloatingButton",
     "setSiteEnabled",
     "saveVoiceSamples",
+    "addVoiceSample",
     "clearVoiceProfile"
   ]);
 
@@ -980,6 +1017,7 @@
     SKIP_WRITE,
     clearAllData,
     clearPendingJump,
+    addVoiceSample,
     clearVoiceProfile,
     consumePendingJump,
     createClient,

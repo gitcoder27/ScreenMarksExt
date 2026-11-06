@@ -120,6 +120,7 @@ const STORAGE_RPC_METHODS = new Set([
   "toggleFloatingButton",
   "setSiteEnabled",
   "saveVoiceSamples",
+  "addVoiceSample",
   "clearVoiceProfile"
 ]);
 
@@ -127,7 +128,7 @@ const STORAGE_RPC_METHODS = new Set([
 // extension pages. Content scripts may complete only their own queued jump.
 // Voice templates are recorded only on the options page.
 const EXTENSION_PAGE_ONLY_RPC_METHODS = new Set([
-  "importState", "clearAllData", "clearPendingJump", "saveVoiceSamples", "clearVoiceProfile"
+  "importState", "clearAllData", "clearPendingJump", "saveVoiceSamples", "addVoiceSample", "clearVoiceProfile"
 ]);
 
 // sender.url is set by the browser, so a page (or a compromised renderer)

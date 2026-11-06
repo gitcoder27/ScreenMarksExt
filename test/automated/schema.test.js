@@ -272,7 +272,7 @@ test("normalizeVoiceProfile keeps known commands with well-formed templates only
   const profile = Schema.normalizeVoiceProfile({
     featureVersion: VOICE_FEATURE_VERSION,
     commands: {
-      next: [template(3), template(4), template(5), template(6)],
+      next: Array.from({ length: MAX_VOICE_SAMPLES + 1 }, (_, i) => template(3 + i)),
       back: [template(2), { frames: 2, data: [1, 2, 3] }, template(MAX_VOICE_TEMPLATE_FRAMES + 1)],
       pause: [{ frames: 1, data: new Array(VOICE_MFCC_COEFFS).fill("1") }],
       play: [{ frames: 1, data: [...new Array(VOICE_MFCC_COEFFS - 1).fill(0), Number.NaN] }],

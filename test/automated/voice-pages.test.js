@@ -106,9 +106,13 @@ test("options lists every voice command and records three takes through the work
   await settle();
   assert.equal(work.mic.opened, 1);
   assert.ok(work.posted.some((message) => message.command === "suspend"), "the engine is told to hold commands");
-  assert.match(work.get("voiceTrainStatus").textContent, /1 of 3/);
+  assert.match(work.get("voiceTrainStatus").textContent, /in your normal voice · take 1 of 3/);
 
-  for (const take of [0, 1, 2]) {
+  work.mic.say("next", 0);
+  await settle();
+  // Each take asks for another way of saying the word.
+  assert.match(work.get("voiceTrainStatus").textContent, /a little softer.* · take 2 of 3 · take 1 done/);
+  for (const take of [1, 2]) {
     work.mic.say("next", take);
     await settle();
   }
@@ -140,6 +144,33 @@ test("options test mode reports the heard word without running anything", async 
   await settle();
   assert.match(work.get("voiceTestResult").textContent, /Heard "skip"/);
   assert.ok(!work.messages.some((message) => message.type === "SCENEMARKS_VOICE_COMMAND"));
+});
+
+test("a word heard in a test can be added to the word the user meant", async () => {
+  const work = await loadOptionsVoice();
+  const Storage = work.context.SceneMarks.Storage;
+  const VoiceFeatures = work.context.SceneMarks.VoiceFeatures;
+  for (const word of ["next", "back", "skip"]) {
+    await Storage.saveVoiceSamples(word, [0, 1, 2].map((take) => VoiceFeatures.extractFeatures(vadUtterance(VoiceFeatures, word, TAKES[take]))));
+  }
+  for (const listener of work.changed) listener({ voiceProfile: { newValue: {} } }, "local");
+  await settle();
+
+  await work.get("voiceTestButton").emit("click");
+  await settle();
+  assert.equal(work.get("voiceTestTeach").children.length, 0, "nothing to add before a word is heard");
+  work.mic.say("back", 4);
+  await settle();
+  const buttons = work.get("voiceTestTeach").children.filter((node) => node.tagName === "BUTTON" || node.type === "button");
+  assert.deepEqual(buttons.map((node) => node.textContent), ["next", "back", "skip"]);
+
+  await buttons[1].emit("click");
+  await settle();
+  const rpc = work.messages.filter((message) => message.type === "SCENEMARKS_STORAGE_RPC").map((message) => message.payload.method);
+  assert.deepEqual(rpc, ["addVoiceSample"]);
+  assert.equal((await Storage.getVoiceProfile()).commands.back.length, 4);
+  assert.match(work.get("voiceTestResult").textContent, /Added to "back" \(4 takes\)/);
+  assert.equal(work.get("voiceTestTeach").children.length, 0, "one utterance is added once");
 });
 
 async function loadPopupVoice(seed) {
@@ -193,7 +224,7 @@ test("a take that sounds different from the other two is re-taken before saving"
   await settle();
   work.mic.say("pause", 2); // A slip: the wrong word.
   await settle();
-  assert.match(work.get("voiceTrainStatus").textContent, /take 3 sounded different/);
+  assert.match(work.get("voiceTrainStatus").textContent, /take 3 did not sound like the same word/);
   assert.equal(work.messages.filter((message) => message.type === "SCENEMARKS_STORAGE_RPC").length, 0);
 
   work.mic.say("next", 2);
@@ -220,7 +251,7 @@ test("ignored sounds keep the prompt and advise only when they repeat", async ()
   rejectedTap();
   await settle();
   const status = work.get("voiceTrainStatus");
-  assert.equal(status.textContent, 'Say "pause" (or your own word) · take 1 of 3 · ignored a tap or click');
+  assert.equal(status.textContent, 'Say "pause" (or your own word) in your normal voice · take 1 of 3 · ignored a tap or click');
   assert.equal(status.classList.contains ? status.classList.contains("is-error") : false, false);
   rejectedTap();
   rejectedTap();

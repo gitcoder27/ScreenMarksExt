@@ -20,7 +20,7 @@ function trainedProfile(words = ["next", "back", "skip"]) {
   for (const word of words) {
     commands[word] = [0, 1, 2].map((take) => VoiceFeatures.extractFeatures(vadUtterance(VoiceFeatures, word, TAKES[take])));
   }
-  return { featureVersion: 2, commands };
+  return { featureVersion: 3, commands };
 }
 
 function loadEngine({ voice = {}, profile = trainedProfile(), listen = true } = {}) {
@@ -205,7 +205,7 @@ test("while the options page records or tests, words are heard but run nothing",
 });
 
 test("with no words recorded the microphone stays closed", async () => {
-  const engine = loadEngine({ profile: { featureVersion: 2, commands: {} } });
+  const engine = loadEngine({ profile: { featureVersion: 3, commands: {} } });
   await engine.settle();
   assert.equal(engine.mic.opened, 0);
   assert.equal((await engine.status()).state, "not-trained");
@@ -256,7 +256,7 @@ test("the engine asks about idleness once a minute only when auto-off is set", a
 });
 
 test("new templates or a mic change reload the engine", async () => {
-  const engine = loadEngine({ profile: { featureVersion: 2, commands: {} } });
+  const engine = loadEngine({ profile: { featureVersion: 3, commands: {} } });
   await engine.settle();
   assert.equal(engine.mic.opened, 0);
   engine.config.profile = trainedProfile(["next", "back"]);
