@@ -326,7 +326,8 @@ test("updateSettings merges voice fields without dropping the others", async () 
   const settings = await Storage.updateSettings({ voice: { micDeviceId: "abc", micLabel: "MacBook Pro Microphone" } });
 
   assert.deepEqual(settings.voice, {
-    enabled: true, sensitivity: 0.8, micDeviceId: "abc", micLabel: "MacBook Pro Microphone"
+    enabled: true, sensitivity: 0.8, micDeviceId: "abc", micLabel: "MacBook Pro Microphone",
+    resumeOnStartup: false, autoOffMinutes: 0, onlyWithVideo: false
   });
   assert.deepEqual(store.readState().settings.voice, settings.voice);
 });
@@ -742,6 +743,7 @@ test("toggleVoiceEnabled flips voice inside the write queue and keeps the other 
   assert.deepEqual([first, second], [true, false]);
   assert.equal(await Storage.toggleVoiceEnabled(), true);
   assert.deepEqual(store.readState().settings.voice, {
-    enabled: true, sensitivity: 0.5, micDeviceId: "mic-9", micLabel: "USB Mic"
+    enabled: true, sensitivity: 0.5, micDeviceId: "mic-9", micLabel: "USB Mic",
+    resumeOnStartup: false, autoOffMinutes: 0, onlyWithVideo: false
   });
 });

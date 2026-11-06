@@ -2,7 +2,7 @@
 
 SceneMarks is a local-first Chromium extension for saving timestamp bookmarks and scene ranges from HTML5 streaming video pages.
 
-It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#data-storage)). It does not download video, record video or audio, capture screenshots, inspect cookies, bypass DRM, send analytics, or use a backend server.
+It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#data-storage)). It does not download or record video, capture screenshots, inspect cookies, bypass DRM, send analytics, or use a backend server. Optional [voice commands](#voice-commands) listen to the microphone while you have them switched on; the sound is matched on this computer and never stored or sent anywhere.
 
 ## What Is Implemented
 
@@ -19,7 +19,8 @@ It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#da
 - Library page with search, filters, favorites, edit/delete, copy share text, export, import, a Random pick button, and a batch Open Random that opens a chosen number of random videos (up to 10 at a time) in new tabs.
 - Favorites at both levels: star entire videos in the Library or individual timestamps in the Library and popup. The Library favorites filter includes any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.
-- Permissions: `storage`, `unlimitedStorage`, `activeTab`, `scripting`, and `tabs`, plus an `<all_urls>` host permission so content scripts (video detection, overlay, queued jumps) run on every page without popup activation. `unlimitedStorage` lifts the 10 MB `chrome.storage.local` cap; Chrome shows no permission warning for it.
+- Hands-free [voice commands](#voice-commands) (next, back, pause, play, mark, skip, return, random), recognized locally against your own recorded words, with no AI model and no network.
+- Permissions: `storage`, `unlimitedStorage`, `activeTab`, `scripting`, `tabs`, and `offscreen`, plus an `<all_urls>` host permission so content scripts (video detection, overlay, queued jumps) run on every page without popup activation. `unlimitedStorage` lifts the 10 MB `chrome.storage.local` cap; Chrome shows no permission warning for it. `offscreen` lets the voice listener run in a hidden extension page, so the microphone permission belongs to SceneMarks rather than to the video sites.
 
 ## Install In Brave
 
@@ -65,6 +66,7 @@ Default browser command shortcuts:
 - `Ctrl+Shift+S` or `Command+Shift+S`: quick save current timestamp.
 - `Ctrl+Shift+M` or `Command+Shift+M`: mark range start/end.
 - `Ctrl+Shift+L` or `Command+Shift+L`: open library.
+- `Alt+Shift+V` (`Option+Shift+V` on a Mac): turn voice commands on or off. A toast on the current page confirms which.
 
 Default page hotkeys:
 
@@ -83,6 +85,50 @@ To customize page hotkeys, open SceneMarks popup, click **Hotkeys**, then use th
 Page hotkeys are registered at `document_start`, synchronously before waiting for settings. Shortcuts pass through while settings load; accepted matches stop propagation before running an action. Saved settings reach open tabs immediately. Reload video tabs after updating extension code. Numpad keys keep their own physical-key identity, separately from main-keyboard digits and Enter.
 
 To customize browser command shortcuts, open `brave://extensions/shortcuts` or `chrome://extensions/shortcuts`.
+
+## Voice Commands
+
+Control playback with short spoken words while you watch, with no key presses. Recognition is classic template matching: you record each word three times, and live speech is compared with your own recordings (MFCC features compared by dynamic time warping). There is no AI model, nothing to download, and no network use. Any word in any language works, and it only recognizes the person who trained it.
+
+| Command (suggested word) | What it does |
+|---|---|
+| next | Jump to the next saved timestamp (like `Alt+Shift+N`) |
+| back | Jump back through saved timestamps (like `Alt+Shift+B`) |
+| pause / play | Pause or resume the video |
+| mark | Quick-save the current time (even when quick save normally asks for a note) |
+| skip | Go to the next video in the lineup and play it from its first saved timestamp |
+| return | Go to the previous video in the lineup and play it from its first saved timestamp |
+| random | Open a saved video that is not open yet, at its first saved timestamp |
+
+Every command shows a toast on the page, such as `Voice: next · Jumped to 04:12 (4/10)` or `Voice: skip · Video 3/10 · 01:23 (1/5)`.
+
+### Setting it up
+
+1. Open Settings → **Voice Commands**. Click **Allow Microphone** and accept the browser prompt. On macOS the browser itself also needs microphone access in System Settings → Privacy & Security → Microphone.
+2. Pick a **Microphone**. **System default** follows macOS: your headphone mic while headphones are plugged in, the built-in mic otherwise. Pick a specific mic to always use it, even with headphones plugged in. If that mic is unplugged, the default is used until it comes back.
+3. Click **Record** next to each command you want and say the word three times, the way you will say it while watching. Short words that sound clearly different work best ("skip" and "next" rather than "back" and "black"). After recording, each word shows how many of its own takes were recognized. "Sounds like ..." means two words are too similar.
+4. Click **Start Test** and say your words. You will see what was heard, without anything running.
+5. Turn voice on with the **Listen for voice commands** switch, the popup's **Voice** row, or `Alt+Shift+V`.
+
+While voice is on, the browser's microphone indicator (the orange dot on macOS) stays lit. Between words SceneMarks only watches the sound level: it ignores taps, clicks, ticking clocks and other sounds that are not voice-like, and compares only word-length speech with your recordings. Leaving it on for hours costs well under 1% CPU. Speech that is not one of your words is ignored, and a word that sits between two of your commands is ignored rather than guessed. After a command there is a 0.7 s pause before the next.
+
+### Options
+
+- **Sensitivity**: toward Stricter for fewer false triggers, toward Looser if words are missed.
+- **Listen only while a tab with a video is active**: the microphone closes when you switch to a tab without a video and reopens when you return.
+- **Turn voice back on after the browser restarts**: off by default, so a browser restart turns voice off and the microphone is never on without you choosing it.
+- **Turn voice off on its own** after 15 minutes to 2 hours with no video playing. "Playing" means a tab is making sound (even with headphones or the Mac muted) or the active tab's video is not paused.
+- **Diagnostics** shows what the listener is doing (mic, level, recent sounds, CPU), with **Copy Report** for bug reports.
+
+### The lineup
+
+**skip** and **return** move through the videos that the Library's batch **Open Random** opened, in the order it opened them, wrapping around at the ends. Each new batch replaces the previous lineup, and a video opened by voice **random** joins its end. If the active tab is not in the lineup, **skip** goes to its first video and **return** to its last. Closed tabs drop out. Without a lineup, **skip** and **return** move to the next or previous web tab in the window.
+
+Switching pauses the video you are leaving, brings the next tab to the front, waits up to about 10 seconds for its player to load, then plays from its first saved timestamp. A video with no saved timestamps just plays. If the site blocks playback that was not started by a click, the toast says **press Space to play**.
+
+### Privacy
+
+The microphone runs in a hidden SceneMarks page (`chrome.offscreen`), so permission is asked once for SceneMarks and never on Netflix, YouTube or any other site. Audio is processed in memory and discarded. Only the numeric features of your recorded words are saved, in the `voiceProfile` key. Voice commands are refused on sites where SceneMarks is switched off, just like page hotkeys.
 
 ## Switching SceneMarks Off For A Site
 
@@ -125,6 +171,7 @@ Everything stays in this browser profile's `chrome.storage.local`, split so that
 | `settings` | Settings, page hotkeys, the pause switch and the switched-off sites (at most 200) |
 | `activeRangeDraft` | A started, unfinished range (dropped after 24 hours) |
 | `pendingJump` | A jump owned by its destination tab and request token (dropped after 15 minutes) |
+| `voiceProfile` | Your recorded voice-command words: three sets of numeric features (MFCCs) per command, no audio. Written only while you record words |
 | `schemaVersion` | The storage layout version, currently 3 |
 
 Saving, editing or favoriting a scene writes only that video's key, so every open tab is told about one video instead of the whole library, and the cost of a save does not grow with the library. All writes run in the service worker, one at a time.
@@ -133,13 +180,15 @@ Versions before schema 2 kept everything in one `scenemarksState` key. When the 
 
 Schema 3 migrates old generic identities using stored source URLs. When those URLs identify different videos, the old record stays intact with an identity-repair notice in the Library. Scene ownership cannot be inferred reliably from already mixed records or URLs lost before migration; export and retain a backup before manually separating those annotations. Migrations also move matching range drafts and queued jumps in the same write as their video.
 
+`voiceProfile` belongs to this computer and microphone, so Library export leaves it out and an import never changes it. **Clear All SceneMarks Data** removes it with everything else. The voice lineup lives in `chrome.storage.session` (memory only) and is gone after a browser restart.
+
 Library exports are a single JSON object (`schemaVersion`, `videos`, `settings`, ...) whatever the storage layout, and import accepts exports from any version. Merge imports combine scenes with identical endpoints and notes by unioning tags and keeping either favorite flag. Conflicting notes/endpoints, nearby distinct times, and tag unions exceeding the tag cap stay as separate scenes; conflicting IDs are reassigned. Duplicate IDs and reversed range endpoints are repaired, invalid scenes are rejected, and the import result reports counts. Merge import keeps current settings unless explicitly requested through the storage API. Replacing imports remain available through the storage API.
 
 Settings saves include only fields changed in that form. External changes update pristine fields and preserve unsaved edits; hotkeys merge per action.
 
 ## Automated Tests
 
-The shared data layer, adapters, service worker, popup capture, Settings synchronization, content hotkeys, overlay privacy and queued-jump workflows have dependency-free tests using Node's built-in test runner and browser/DOM doubles:
+The shared data layer, adapters, service worker, popup capture, Settings synchronization, content hotkeys, overlay privacy, queued-jump workflows and voice commands have dependency-free tests using Node's built-in test runner and browser/DOM doubles. Voice tests run synthetic speech (generated vowels and consonants) through the real voice-activity gate, MFCC and DTW code, the offscreen engine, and the recording screen:
 
 ```
 node --test test/automated/*.test.js
@@ -169,6 +218,15 @@ Do this first on a normal HTML5 video before trying streaming sites:
 9. Use overlay **Quick Save**, **Mark range start/end** and **Open Library**. Confirm saved annotations appear only in the popup/Library. Try popup capture while playback continues, customized single-key/numpad shortcuts, and independent Settings changes from two extension pages.
 10. Serve the test page over `http://localhost` (for example `python3 -m http.server`) and press **Turn off here** in the popup. Confirm that the overlay disappears, page hotkeys do nothing, and the toolbar badge reads **OFF**. Then open a scene from the Library and confirm the jump still lands. Press **Turn on here** and confirm everything comes back without a reload. Repeat with **Pause everywhere** / **Resume**, which also covers `file://` pages.
 
+Voice commands (headphones recommended):
+
+1. Settings → **Voice Commands**: **Allow Microphone**, pick a mic, and record next, back, pause, play, mark, skip, return and random. Each should show "Recognized 3 of 3 takes". Use **Start Test** to check each word, and check that taps, coughs and other words are ignored.
+2. Turn voice on from the popup. Its **Voice** row should read **Listening**, and the mic indicator should light.
+3. On the test page with saved timestamps, say each word and confirm the toast and the action. "mark" should save even with **Quick save should ask for a note** checked.
+4. In the Library, batch **Open Random** 3 videos. On one of them, say "skip" and "return" and confirm each switch pauses the old video and plays the new one from its first saved timestamp, with the right `Video n/3` count. Close one lineup tab and confirm it is skipped. Say "random" and confirm a new video opens at its first mark.
+5. Turn on **Listen only while a tab with a video is active**, switch to a tab without a video, and confirm the mic indicator goes off within about 5 seconds and comes back on a video tab.
+6. Press `Alt+Shift+V` to turn voice off and on, restart the browser to check it stays off (and on, with **Turn voice back on after the browser restarts**), and switch the site off to check voice commands are refused there.
+
 Then test on Netflix, Prime Video, Hotstar/JioHotstar, and YouTube:
 
 1. Start playback first.
@@ -183,5 +241,7 @@ Then test on Netflix, Prime Video, Hotstar/JioHotstar, and YouTube:
 - Some streaming sites may delay or block seeking until metadata/playback is ready.
 - Browser command shortcuts can conflict with site/browser shortcuts.
 - The `<all_urls>` host permission is broad; all processing stays local, but review `manifest.json` before installing builds you do not trust.
+- Voice commands recognize only the voice that recorded them, and work best with a few clearly different words. A new room or mic can lower accuracy; record the word again. Dialogue playing loudly from laptop speakers can occasionally sound like a command, so headphones or the Stricter setting help. There is no wake word.
+- After a voice tab switch the site may block playback that was not started by a click (autoplay policy); press Space when the toast says so.
 
 Legacy generic records may need manual repair, and generic players with unknown session parameters can produce separate records. Automated browser doubles do not validate fullscreen layout or DRM/service integration; complete the manual checklist in Chrome/Brave before release.

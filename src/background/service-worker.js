@@ -30,6 +30,9 @@ importScripts(
 const MIGRATIONS_CHECKED_FLAG = "migrationsChecked";
 let migrationRun = null;
 let voiceDocumentWork = Promise.resolve();
+// Set by onStartup, which fires as the first worker of a browser session
+// starts, before the once-per-load pass's storage reads come back.
+let browserStarting = false;
 
 async function runMigrationsOncePerLoad() {
   const session = chrome.storage.session;
@@ -42,7 +45,9 @@ async function runMigrationsOncePerLoad() {
 
   await SceneMarks.Migrations.runAll();
   const settings = await SceneMarks.Storage.getSettings();
-  await syncVoiceDocument(settings.voice.enabled);
+  // After a browser restart voice stays off unless the user asked for it
+  // to resume (onStartup turns the setting off; this avoids even opening).
+  await syncVoiceDocument(settings.voice.enabled && (!browserStarting || settings.voice.resumeOnStartup));
   if (session) {
     await session.set({ [MIGRATIONS_CHECKED_FLAG]: true });
   }
@@ -62,6 +67,10 @@ function runMigrations({ force = false } = {}) {
 
 runMigrations();
 chrome.runtime.onInstalled.addListener(() => runMigrations());
+chrome.runtime.onStartup.addListener(() => {
+  browserStarting = true;
+  turnVoiceOffAfterRestart().catch((error) => console.warn("SceneMarks voice startup rule failed:", error));
+});
 chrome.runtime.onStartup.addListener(() => runMigrations());
 // Tab IDs are only meaningful within a browser session. A normal MV3 worker
 // wake preserves ownership; browser startup must not reuse an old tab ID.
@@ -523,6 +532,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!changeInfo.url && changeInfo.status !== "complete") {
     return;
   }
+  if (tab.active && changeInfo.status === "complete") {
+    refreshVoiceListening().catch(() => {});
+  }
 
   getBadgeSettings()
     .then((settings) => updateBadge(tabId, tab.url, settings))
@@ -603,6 +615,8 @@ async function openVoiceDocument() {
   if (!chrome.offscreen || await hasVoiceDocument()) {
     return;
   }
+  // Auto-off counts idle time from when voice was turned on.
+  await markVoiceActivity();
   try {
     await chrome.offscreen.createDocument({
       url: VOICE_OFFSCREEN_PATH,
@@ -633,13 +647,99 @@ function isVoiceDocumentSender(sender) {
   return Boolean(sender && sender.url === chrome.runtime.getURL(VOICE_OFFSCREEN_PATH));
 }
 
-// Only what the engine needs, never the rest of settings.
+// Only what the engine needs, never the rest of settings. `listen` is
+// whether the mic should be open now ("only while a video tab is active").
 async function getVoiceConfig() {
   const [settings, profile] = await Promise.all([
     SceneMarks.Storage.getSettings(),
     SceneMarks.Storage.getVoiceProfile()
   ]);
-  return { ok: true, voice: settings.voice, profile };
+  const listen = settings.voice.onlyWithVideo ? (await getActivePlayback()).detected : true;
+  return { ok: true, voice: settings.voice, profile, listen };
+}
+
+// ---- When to listen -------------------------------------------------
+async function turnVoiceOffAfterRestart() {
+  const settings = await SceneMarks.Storage.getSettings();
+  if (settings.voice.enabled && !settings.voice.resumeOnStartup) {
+    await SceneMarks.Storage.updateSettings({ voice: { enabled: false } });
+  }
+}
+
+// What the active tab's player is doing, asked without injecting: a tab
+// without our content script has no video we can control anyway.
+async function getActivePlayback() {
+  const tab = await getVoiceTargetTab();
+  if (!tab || !isWebPageUrl(tab.url)) {
+    return { detected: false, playing: false };
+  }
+  try {
+    const state = await sendTabMessage(tab.id, {
+      type: SceneMarks.Constants.MESSAGE_TYPES.VOICE_ACTION,
+      payload: { action: "playback-state" }
+    });
+    return { detected: Boolean(state && state.detected), playing: Boolean(state && state.playing) };
+  } catch (_error) {
+    return { detected: false, playing: false };
+  }
+}
+
+// "Only while a video tab is active": recomputed when the active tab,
+// the focused window or the active tab's video changes. The engine
+// ignores repeats and waits a moment before closing the mic.
+async function refreshVoiceListening() {
+  const settings = await getBadgeSettings();
+  if (!settings.voice.enabled || !settings.voice.onlyWithVideo || !(await hasVoiceDocument())) {
+    return;
+  }
+  const { detected } = await getActivePlayback();
+  chrome.runtime.sendMessage({
+    type: SceneMarks.Constants.MESSAGE_TYPES.VOICE_SET_LISTENING,
+    payload: { listen: detected }
+  }).catch(() => {});
+}
+
+chrome.tabs.onActivated.addListener(() => {
+  refreshVoiceListening().catch(() => {});
+});
+if (chrome.windows && chrome.windows.onFocusChanged) {
+  chrome.windows.onFocusChanged.addListener((windowId) => {
+    // WINDOW_ID_NONE: another app took focus; the browser window that
+    // had it is still the one being watched.
+    if (windowId !== chrome.windows.WINDOW_ID_NONE) refreshVoiceListening().catch(() => {});
+  });
+}
+
+// Auto-off: the time voice was last needed lives in session storage, so
+// it survives the worker sleeping between the engine's minute checks.
+const VOICE_ACTIVITY_KEY = "voiceLastActivityAt";
+
+async function markVoiceActivity() {
+  if (chrome.storage.session) {
+    await chrome.storage.session.set({ [VOICE_ACTIVITY_KEY]: Date.now() });
+  }
+}
+
+async function checkVoiceIdle() {
+  const settings = await SceneMarks.Storage.getSettings();
+  const minutes = settings.voice.autoOffMinutes;
+  if (!settings.voice.enabled || !minutes || !chrome.storage.session) {
+    return { ok: true, idle: false };
+  }
+  // A tab making sound (with headphones, or even with the Mac muted) or a
+  // video playing silently in the active tab counts as watching.
+  const audible = await chrome.tabs.query({ audible: true });
+  const playing = audible.length > 0 || (await getActivePlayback()).playing;
+  const last = (await chrome.storage.session.get(VOICE_ACTIVITY_KEY))[VOICE_ACTIVITY_KEY];
+  if (playing || !Number.isFinite(last)) {
+    await markVoiceActivity();
+    return { ok: true, idle: false };
+  }
+  if (Date.now() - last < minutes * 60 * 1000) {
+    return { ok: true, idle: false };
+  }
+  await SceneMarks.Storage.updateSettings({ voice: { enabled: false } });
+  return { ok: true, idle: true };
 }
 
 async function notifyVoiceConfigChanged() {
@@ -832,6 +932,9 @@ async function handleVoiceCommand(payload) {
   if (!settings.voice.enabled) {
     return { ok: false, error: "Voice commands are off." };
   }
+  if (settings.voice.autoOffMinutes) {
+    await markVoiceActivity();
+  }
 
   if (PAGE_VOICE_ACTIONS.has(command)) {
     return sendVoiceAction(await getVoiceTargetTab(), { action: command, heard: command });
@@ -946,6 +1049,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     return respondWith(getVoiceConfig(), sendResponse);
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_IDLE_CHECK) {
+    if (!isVoiceDocumentSender(sender)) {
+      sendResponse({ ok: false, error: "Only the SceneMarks voice engine may ask." });
+      return false;
+    }
+    return respondWith(checkVoiceIdle(), sendResponse);
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_VIDEO_PRESENCE) {
+    // A hint only: the worker re-asks the active tab itself.
+    if (senderTabId(sender) !== null && sender.tab.active) {
+      refreshVoiceListening().catch(() => {});
+    }
+    sendResponse({ ok: true });
+    return false;
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.VOICE_COMMAND) {

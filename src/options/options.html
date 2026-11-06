@@ -179,6 +179,35 @@
               <button id="voiceTestButton" class="secondary-button" type="button">Start Test</button>
             </div>
             <p id="voiceTestResult" class="voice-test-result" role="status"></p>
+            <label for="voiceSensitivity">
+              Sensitivity
+              <input id="voiceSensitivity" type="range" min="0" max="1" step="0.05">
+            </label>
+            <div class="voice-scale" aria-hidden="true"><span>Stricter: fewer false triggers</span><span>Looser: hears you more easily</span></div>
+            <p class="hint">If words are missed, slide toward Looser or record them again. If dialogue, coughs or other words trigger commands, slide toward Stricter. The test above uses the new setting right away.</p>
+          </div>
+
+          <div class="voice-step">
+            <h3>4. When to listen</h3>
+            <label class="switch-row">
+              <input id="voiceOnlyWithVideo" type="checkbox">
+              <span>Listen only while a tab with a video is active (the microphone closes otherwise)</span>
+            </label>
+            <label class="switch-row">
+              <input id="voiceResumeOnStartup" type="checkbox">
+              <span>Turn voice back on after the browser restarts</span>
+            </label>
+            <label>
+              Turn voice off on its own
+              <select id="voiceAutoOffMinutes">
+                <option value="0">Never</option>
+                <option value="15">After 15 minutes with no video playing</option>
+                <option value="30">After 30 minutes with no video playing</option>
+                <option value="60">After 1 hour with no video playing</option>
+                <option value="120">After 2 hours with no video playing</option>
+              </select>
+            </label>
+            <p class="hint">"Playing" means a tab is making sound (even with headphones or the Mac muted) or the active tab's video is not paused.</p>
           </div>
 
           <details class="voice-diagnostics">

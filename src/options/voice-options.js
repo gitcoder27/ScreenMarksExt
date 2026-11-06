@@ -24,6 +24,7 @@
     opening: "Starting the microphone",
     "mic-error": "Microphone unavailable",
     "not-trained": "Waiting: no words recorded yet",
+    "waiting-for-video": "Waiting for a tab with a video (microphone closed)",
     retrain: "Waiting: words were recorded with an older version; record them again",
     closed: "Microphone closed"
   };
@@ -451,7 +452,7 @@
       `Time: ${new Date().toISOString()}`,
       `Browser: ${brave ? "Brave" : "not Brave"}; ${navigator.userAgent}`,
       `Page mic permission: ${await permissionState()}${pageMicLine ? ` (${pageMicLine})` : ""}`,
-      `Voice setting: ${voiceSettings.enabled ? "on" : "off"}, sensitivity ${voiceSettings.sensitivity}, mic ${voiceSettings.micDeviceId ? voiceSettings.micLabel : "system default"}`,
+      `Voice setting: ${voiceSettings.enabled ? "on" : "off"}, sensitivity ${voiceSettings.sensitivity}, mic ${voiceSettings.micDeviceId ? voiceSettings.micLabel : "system default"}, only with video ${voiceSettings.onlyWithVideo}, resume after restart ${voiceSettings.resumeOnStartup}, auto-off ${voiceSettings.autoOffMinutes || "never"}`,
       `Recorded: ${VOICE_COMMANDS.map(({ id }) => `${id} ${(profile.commands[id] || []).length}`).join(", ")}`,
       `Quality: ${quality.map((q) => `${q.command} ${q.recognized}/${q.total}${q.confusedWith.length ? ` (~${q.confusedWith.join("/")})` : ""}`).join(", ") || "-"}`,
       calibration ? `Calibration: typical distance ${calibration.typicalDistance.toFixed(2)} over ${calibration.pairs} pairs` : "Calibration: -",
@@ -471,6 +472,10 @@
     const previousSensitivity = voiceSettings.sensitivity;
     voiceSettings = settings.voice;
     byId("voiceEnabled").checked = voiceSettings.enabled;
+    byId("voiceSensitivity").value = String(voiceSettings.sensitivity);
+    byId("voiceOnlyWithVideo").checked = voiceSettings.onlyWithVideo;
+    byId("voiceResumeOnStartup").checked = voiceSettings.resumeOnStartup;
+    byId("voiceAutoOffMinutes").value = String(voiceSettings.autoOffMinutes);
     if (previousSensitivity !== voiceSettings.sensitivity && calibration) {
       quality = VoiceFeatures.evaluateProfile(library, calibration, voiceSettings.sensitivity);
       renderWords();
@@ -493,6 +498,22 @@
         event.target.checked = !enabled;
       }
       renderDiagnostics();
+    });
+    byId("voiceSensitivity").addEventListener("change", (event) => {
+      saveVoice({ sensitivity: Number(event.target.value) }, "Sensitivity saved.");
+    });
+    // The test reads voiceSettings, so a drag takes effect before it saves.
+    byId("voiceSensitivity").addEventListener("input", (event) => {
+      voiceSettings = { ...voiceSettings, sensitivity: Number(event.target.value) };
+    });
+    byId("voiceOnlyWithVideo").addEventListener("change", (event) => {
+      saveVoice({ onlyWithVideo: event.target.checked }, "Saved.");
+    });
+    byId("voiceResumeOnStartup").addEventListener("change", (event) => {
+      saveVoice({ resumeOnStartup: event.target.checked }, "Saved.");
+    });
+    byId("voiceAutoOffMinutes").addEventListener("change", (event) => {
+      saveVoice({ autoOffMinutes: Number(event.target.value) }, "Saved.");
     });
     byId("voiceGrantButton").addEventListener("click", grant);
     byId("voiceMicSelect").addEventListener("change", saveMic);

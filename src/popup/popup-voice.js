@@ -50,6 +50,7 @@
         blocked ? "Allow the microphone in Settings → Voice Commands." : `The microphone could not start: ${s.capture.error}`, true];
     }
     if (s.state === "opening") return ["Starting…", null, false];
+    if (s.state === "waiting-for-video") return ["Waiting", "The microphone opens when a tab with a video is active.", false];
     if (s.state === "suspended") return ["Paused", "Settings is recording or testing words.", false];
     const heard = s.lastHeard && s.lastHeard.outcome === "sent"
       ? `Last: "${sayFor(s.lastHeard.command)}" ${ago(s.lastHeard.at)}${s.lastHeard.result ? ` · ${s.lastHeard.result}` : ""}`

@@ -54,11 +54,18 @@
     // Voice commands. micDeviceId "" follows the system default input
     // (macOS switches it to plugged-in headphones); otherwise it pins one
     // mic, with micLabel kept to find it again if its ID changes.
+    // resumeOnStartup: stay on across a browser restart (off: a restart
+    // turns voice off, so the mic is never silently live). autoOffMinutes:
+    // turn off after that long with no video playing (0 = never).
+    // onlyWithVideo: keep the mic closed unless the active tab has a video.
     voice: Object.freeze({
       enabled: false,
       sensitivity: 0.5,
       micDeviceId: "",
-      micLabel: ""
+      micLabel: "",
+      resumeOnStartup: false,
+      autoOffMinutes: 0,
+      onlyWithVideo: false
     }),
     hotkeys: Object.freeze({
       quickSave: "Alt+Shift+S",
@@ -102,7 +109,15 @@
     // Offscreen engine -> worker: a command word was recognized.
     VOICE_COMMAND: "SCENEMARKS_VOICE_COMMAND",
     // Worker -> content script: run a voice action on this tab.
-    VOICE_ACTION: "SCENEMARKS_VOICE_ACTION"
+    VOICE_ACTION: "SCENEMARKS_VOICE_ACTION",
+    // Worker -> offscreen engine: open or close the mic ("only while a
+    // video tab is active").
+    VOICE_SET_LISTENING: "SCENEMARKS_VOICE_SET_LISTENING",
+    // Content script -> worker: this tab's video appeared or went away.
+    VOICE_VIDEO_PRESENCE: "SCENEMARKS_VOICE_VIDEO_PRESENCE",
+    // Offscreen engine -> worker, once a minute with auto-off on: has a
+    // video played lately?
+    VOICE_IDLE_CHECK: "SCENEMARKS_VOICE_IDLE_CHECK"
   });
 
   // The spoken commands, in training-screen order. The user records their
@@ -126,6 +141,7 @@
   // another version no longer match and must be recorded again.
   const VOICE_FEATURE_VERSION = 1;
   const VOICE_COOLDOWN_MS = 700;
+  const VOICE_AUTO_OFF_CHOICES = Object.freeze([0, 15, 30, 60, 120]);
 
   // The offscreen voice engine reports status to open extension pages on
   // this BroadcastChannel (same extension origin) instead of
@@ -151,6 +167,7 @@
     SCHEMA_VERSION,
     STORAGE_KEYS,
     VIDEO_KEY_PREFIX,
+    VOICE_AUTO_OFF_CHOICES,
     VOICE_COMMANDS,
     VOICE_COOLDOWN_MS,
     VOICE_FEATURE_VERSION,

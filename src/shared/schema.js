@@ -181,7 +181,12 @@
         ? Math.min(1, Math.max(0, sensitivity))
         : defaults.sensitivity,
       micDeviceId: sanitizeText(source.micDeviceId, cap),
-      micLabel: sanitizeText(source.micLabel, cap)
+      micLabel: sanitizeText(source.micLabel, cap),
+      resumeOnStartup: source.resumeOnStartup === true,
+      autoOffMinutes: SceneMarks.Constants.VOICE_AUTO_OFF_CHOICES.includes(source.autoOffMinutes)
+        ? source.autoOffMinutes
+        : defaults.autoOffMinutes,
+      onlyWithVideo: source.onlyWithVideo === true
     };
   }
 

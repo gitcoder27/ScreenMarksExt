@@ -365,6 +365,19 @@ h3 {
   padding: 6px 10px;
 }
 
+.voice-scale {
+  color: #94a3b8;
+  display: flex;
+  font-size: 11px;
+  justify-content: space-between;
+  margin-top: -6px;
+}
+
+input[type="range"] {
+  accent-color: #facc15;
+  width: 100%;
+}
+
 .voice-diagnostics summary {
   color: #cbd5e1;
   cursor: pointer;

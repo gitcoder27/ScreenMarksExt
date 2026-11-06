@@ -243,7 +243,14 @@ test("pending-jump normalization preserves owned requests and safely reads legac
 
 test("normalizeSettings fills voice defaults and caps its fields", () => {
   const defaults = Schema.normalizeSettings({});
-  assert.deepEqual(defaults.voice, { enabled: false, sensitivity: 0.5, micDeviceId: "", micLabel: "" });
+  assert.deepEqual(defaults.voice, {
+    enabled: false, sensitivity: 0.5, micDeviceId: "", micLabel: "",
+    resumeOnStartup: false, autoOffMinutes: 0, onlyWithVideo: false
+  });
+  const chosen = Schema.normalizeSettings({ voice: { resumeOnStartup: true, autoOffMinutes: 30, onlyWithVideo: true } }).voice;
+  assert.deepEqual([chosen.resumeOnStartup, chosen.autoOffMinutes, chosen.onlyWithVideo], [true, 30, true]);
+  const odd = Schema.normalizeSettings({ voice: { resumeOnStartup: "yes", autoOffMinutes: 7, onlyWithVideo: 1 } }).voice;
+  assert.deepEqual([odd.resumeOnStartup, odd.autoOffMinutes, odd.onlyWithVideo], [false, 0, false]);
 
   const cap = SceneMarks.Constants.MAX_VOICE_MIC_FIELD_LENGTH;
   const voice = Schema.normalizeSettings({

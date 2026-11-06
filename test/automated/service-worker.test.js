@@ -94,6 +94,7 @@ function loadWorker(seedEntries, options) {
     tabs: {
       query: async (filter = {}) => openTabs.filter((tab) =>
         (filter.active === undefined || tab.active === undefined || tab.active === filter.active)
+        && (filter.audible === undefined || tab.audible === undefined || tab.audible === filter.audible)
         && (filter.windowId === undefined || tab.windowId === undefined || tab.windowId === filter.windowId)),
       get: async (id) => {
         const tab = openTabs.find((item) => item.id === id);
@@ -120,7 +121,8 @@ function loadWorker(seedEntries, options) {
         const reply = options && options.tabReply ? options.tabReply(tabId, message) : { ok: true };
         setImmediate(() => callback(reply));
       },
-      onUpdated: event("tabs.onUpdated")
+      onUpdated: event("tabs.onUpdated"),
+      onActivated: event("tabs.onActivated")
     },
     storage: {
       local: store.local,
@@ -718,4 +720,97 @@ test("random with every saved video open reports it", async () => {
   assert.equal(response.ok, false);
   assert.match(response.error, /already open/);
   assert.equal(work.openedTabs.length, 0);
+});
+
+// ---- When to listen: restart, auto-off, only with a video -----------------
+test("a browser restart turns voice off unless it is set to resume", async () => {
+  const off = loadWorker({ schemaVersion: 3, settings: { voice: { enabled: true } } }, { tabs: [] });
+  off.listeners.onStartup.forEach((listener) => listener());
+  await settle();
+  assert.equal(off.store.raw("settings").voice.enabled, false);
+  assert.deepEqual(off.offscreenLog, []); // The mic never opened.
+
+  const resume = loadWorker({ schemaVersion: 3, settings: { voice: { enabled: true, resumeOnStartup: true } } }, { tabs: [] });
+  resume.listeners.onStartup.forEach((listener) => listener());
+  await settle();
+  assert.equal(resume.store.raw("settings").voice.enabled, true);
+  assert.deepEqual(resume.offscreenLog, [["create", "src/voice/offscreen.html"]]);
+});
+
+function idleCheck(work, sender = ENGINE_SENDER) {
+  return sendToWorker(work.listeners, { type: "SCENEMARKS_VOICE_IDLE_CHECK" }, sender);
+}
+
+test("auto-off turns voice off after the set time with nothing playing", async () => {
+  const quietTab = { id: 7, url: "https://www.youtube.com/watch?v=abcdEFGH123", active: true, windowId: 1, index: 0, audible: false };
+  const work = loadWorker({ settings: { voice: { enabled: true, autoOffMinutes: 15 } } }, {
+    tabs: [quietTab],
+    tabReply: (_tabId, message) => (message.payload && message.payload.action === "playback-state"
+      ? { ok: true, detected: true, playing: false } : { ok: true })
+  });
+  await settle();
+  assert.equal((await idleCheck(work, { url: "https://evil.example/" })).ok, false);
+
+  // Voice opened just now: not idle yet.
+  assert.equal((await idleCheck(work)).idle, false);
+  // A paused video in the active tab is not watching.
+  work.session.voiceLastActivityAt = Date.now() - 16 * 60 * 1000;
+  assert.equal((await idleCheck(work)).idle, true);
+  assert.equal(work.store.raw("settings").voice.enabled, false);
+});
+
+test("auto-off counts a tab making sound or a playing video as watching", async () => {
+  const tab = { id: 7, url: "https://www.youtube.com/watch?v=abcdEFGH123", active: true, windowId: 1, index: 0, audible: true };
+  const work = loadWorker({ settings: { voice: { enabled: true, autoOffMinutes: 15 } } }, { tabs: [tab] });
+  await settle();
+  work.session.voiceLastActivityAt = Date.now() - 60 * 60 * 1000;
+  assert.equal((await idleCheck(work)).idle, false);
+  assert.ok(Date.now() - work.session.voiceLastActivityAt < 1000);
+  assert.equal(work.store.raw("settings").voice.enabled, true);
+
+  // Never with auto-off set to 0.
+  const never = loadWorker({ settings: { voice: { enabled: true } } }, { tabs: [] });
+  await settle();
+  never.session.voiceLastActivityAt = 0;
+  assert.equal((await idleCheck(never)).idle, false);
+});
+
+test("only-with-video tells the engine to listen when the active tab has a video", async () => {
+  let hasVideo = false;
+  const tab = { id: 7, url: "https://www.youtube.com/watch?v=abcdEFGH123", active: true, windowId: 1, index: 0 };
+  const work = loadWorker({ settings: { voice: { enabled: true, onlyWithVideo: true } } }, {
+    tabs: [tab],
+    offscreenOpen: true,
+    tabReply: (_tabId, message) => (message.payload && message.payload.action === "playback-state"
+      ? { ok: true, detected: hasVideo, playing: hasVideo } : { ok: true })
+  });
+  await settle();
+  const config = await sendToWorker(work.listeners, { type: "SCENEMARKS_VOICE_GET_CONFIG" }, ENGINE_SENDER);
+  assert.equal(config.listen, false);
+
+  hasVideo = true;
+  work.listeners["tabs.onActivated"].forEach((listener) => listener({ tabId: 7, windowId: 1 }));
+  await settle();
+  const listening = work.runtimeMessages.filter((message) => message.type === "SCENEMARKS_VOICE_SET_LISTENING");
+  assert.deepEqual(listening.map((message) => message.payload.listen), [true]);
+
+  // A content hint from a background tab is ignored; from the active tab it re-checks.
+  hasVideo = false;
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_VOICE_VIDEO_PRESENCE", payload: { detected: false } },
+    { url: tab.url, tab: { id: 9, active: false }, frameId: 0 });
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_VOICE_VIDEO_PRESENCE", payload: { detected: false } },
+    { url: tab.url, tab: { id: 7, active: true }, frameId: 0 });
+  await settle();
+  assert.deepEqual(work.runtimeMessages.filter((message) => message.type === "SCENEMARKS_VOICE_SET_LISTENING")
+    .map((message) => message.payload.listen), [true, false]);
+});
+
+test("without only-with-video, tab switches send the engine nothing", async () => {
+  const tab = { id: 7, url: "https://www.youtube.com/watch?v=abcdEFGH123", active: true, windowId: 1, index: 0 };
+  const work = loadWorker({ settings: { voice: { enabled: true } } }, { tabs: [tab], offscreenOpen: true });
+  await settle();
+  work.listeners["tabs.onActivated"].forEach((listener) => listener({ tabId: 7, windowId: 1 }));
+  await settle();
+  assert.deepEqual(work.runtimeMessages, []);
+  assert.equal(work.tabMessages.length, 0);
 });

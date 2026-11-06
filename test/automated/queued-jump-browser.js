@@ -31,6 +31,7 @@ function createJumpBrowser(seed = {}) {
   worker.context.chrome.action = { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} };
   worker.context.chrome.tabs = {
     onUpdated: event("updated"),
+    onActivated: event("activated"),
     query: async () => [...tabs.values()],
     async create(options) {
       const tab = { id: nextTabId++, ...options };

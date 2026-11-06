@@ -14,6 +14,10 @@
   const STATUS_INTERVAL_MS = 1000;
   const INTEREST_MS = 6000;
   const HISTORY_LENGTH = 10;
+  // "Only while a video tab is active": wait this long before closing the
+  // mic, so switching between two video tabs does not flicker it.
+  const LISTEN_CLOSE_DELAY_MS = 5000;
+  const IDLE_CHECK_MS = 60 * 1000;
 
   const channel = new BroadcastChannel(Constants.VOICE_STATUS_CHANNEL);
 
@@ -25,6 +29,8 @@
   let suspendedUntil = 0;
   let interestUntil = 0;
   let listeningSince = null;
+  let listenAllowed = true;
+  let listenCloseTimer = null;
   let busyTotalMs = 0;
   let busyMaxPercent = 0;
 
@@ -58,6 +64,7 @@
 
   function engineState() {
     if (!library.length) return staleProfile ? "retrain" : "not-trained";
+    if (!listenAllowed && capture.status.state === "closed") return "waiting-for-video";
     const state = capture.status.state;
     if (state === "open") return Date.now() < suspendedUntil ? "suspended" : "listening";
     return state; // opening | mic-error | closed
@@ -180,12 +187,30 @@
     const previousMic = `${voice.micDeviceId}\n${voice.micLabel}`;
     voice = { ...voice, ...response.voice };
     applyProfile(response.profile);
+    setListenAllowed(response.listen !== false, { immediate: true });
     return previousMic !== `${voice.micDeviceId}\n${voice.micLabel}`;
   }
 
-  // The mic is open only when there is something to listen for.
+  // Closing waits a moment (a tab switch between two videos sends a
+  // brief "no video"); opening is immediate.
+  function setListenAllowed(allowed, { immediate = false } = {}) {
+    clearTimeout(listenCloseTimer);
+    listenCloseTimer = null;
+    if (allowed || immediate) {
+      listenAllowed = allowed;
+      return;
+    }
+    listenCloseTimer = setTimeout(() => {
+      listenCloseTimer = null;
+      listenAllowed = false;
+      syncCapture();
+    }, LISTEN_CLOSE_DELAY_MS);
+  }
+
+  // The mic is open only when there is something to listen for, and (with
+  // "only while a video tab is active") a video tab is active.
   async function syncCapture({ micChanged = false } = {}) {
-    const shouldListen = library.length > 0;
+    const shouldListen = library.length > 0 && listenAllowed;
     const isOpen = capture.status.state !== "closed";
     if (shouldListen && !isOpen) {
       await capture.start();
@@ -198,10 +223,17 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender) => {
-    if (!message || message.type !== MESSAGE_TYPES.VOICE_CONFIG_CHANGED) {
+    if (!message || !sender || !String(sender.url || "").startsWith(chrome.runtime.getURL(""))) {
       return false;
     }
-    if (!sender || !String(sender.url || "").startsWith(chrome.runtime.getURL(""))) {
+    if (message.type === MESSAGE_TYPES.VOICE_SET_LISTENING) {
+      if (voice.onlyWithVideo) {
+        setListenAllowed(Boolean(message.payload && message.payload.listen));
+        syncCapture();
+      }
+      return false;
+    }
+    if (message.type !== MESSAGE_TYPES.VOICE_CONFIG_CHANGED) {
       return false;
     }
     loadConfig().then((micChanged) => syncCapture({
@@ -238,6 +270,15 @@
       publishSoon();
     }
   };
+
+  // Auto-off: once a minute, and only when it is set, ask the worker
+  // whether a video has played lately; it turns voice off (closing this
+  // document) when not.
+  setInterval(() => {
+    if (voice.autoOffMinutes > 0) {
+      Promise.resolve(chrome.runtime.sendMessage({ type: MESSAGE_TYPES.VOICE_IDLE_CHECK })).catch(() => {});
+    }
+  }, IDLE_CHECK_MS);
 
   setInterval(publish, STATUS_INTERVAL_MS);
   loadConfig().then(() => syncCapture());

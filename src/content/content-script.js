@@ -142,6 +142,7 @@
 
       syncOverlayVisibility();
       schedulePendingJumpCheck(500);
+      reportVideoPresence();
     },
     onPlaybackTick: () => {
       if (isContextDead()) {
@@ -647,6 +648,11 @@
       case "startAtFirstMark":
         result = await startAtFirstMark(payload);
         break;
+      case "playback-state": {
+        // Read-only, for "listen only with a video" and auto-off.
+        const video = detector.getActiveVideo();
+        return { ok: true, detected: Boolean(getCurrentSnapshot().detected), playing: Boolean(video && !video.paused) };
+      }
       case "announce": {
         // Fixed text from the worker, never saved content.
         const text = String((payload && payload.message) || "").slice(0, 120);
@@ -659,6 +665,27 @@
     showVoiceToast(payload.heard, result);
     // Only fixed text goes back: the engine shows it on extension pages.
     return { ok: Boolean(result.ok), message: result.ok ? result.message : undefined, error: result.ok ? undefined : result.error };
+  }
+
+  // With "listen only while a video tab is active" on, tell the worker
+  // when this visible tab's video appears or goes away, so the mic can
+  // open as soon as a player loads. Only changes are sent.
+  let reportedVideoPresence = null;
+
+  function reportVideoPresence() {
+    const voice = getSettingsSync().voice;
+    if (!voice || !voice.enabled || !voice.onlyWithVideo || document.hidden || !isActiveHere()) {
+      return;
+    }
+    const detected = Boolean(getCurrentSnapshot().detected);
+    if (detected === reportedVideoPresence) {
+      return;
+    }
+    reportedVideoPresence = detected;
+    Promise.resolve(chrome.runtime.sendMessage({
+      type: MESSAGE_TYPES.VOICE_VIDEO_PRESENCE,
+      payload: { detected }
+    })).catch(() => {});
   }
 
   // Capture messages come from the popup and the browser-level shortcuts;
@@ -889,7 +916,11 @@
   }
 
   function handleVisibilityChange() {
-    if (!document.hidden) schedulePendingJumpCheck(100);
+    if (!document.hidden) {
+      schedulePendingJumpCheck(100);
+      reportedVideoPresence = null;
+      reportVideoPresence();
+    }
   }
 
   function schedulePendingJumpCheck(delayMs) {

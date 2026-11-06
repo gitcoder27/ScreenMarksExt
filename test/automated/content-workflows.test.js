@@ -330,3 +330,33 @@ test("worker announcements show as toasts, errors styled as errors", async () =>
   assert.equal(result.ok, false);
   assert.match(pageText(work), /Voice: skip · No other video tab to switch to/);
 });
+
+test("playback-state reports the player without a toast, and nothing where SceneMarks is off", async () => {
+  const video = fakeVideo();
+  const work = loadContent({ video });
+  await flush();
+  const state = await voice(work, "playback-state");
+  assert.deepEqual({ ...state }, { ok: true, detected: true, playing: true });
+  assert.doesNotMatch(pageText(work), /Voice:/);
+
+  const off = loadContent({ video, seed: { settings: { extensionEnabled: false } } });
+  await flush();
+  assert.equal((await voice(off, "playback-state")).detected, undefined);
+});
+
+test("with only-with-video on, a tab reports its video appearing and going away", async () => {
+  const work = loadContent({ seed: { settings: { voice: { enabled: true, onlyWithVideo: true } } } });
+  await flush();
+  const presence = () => work.messages.filter((message) => message.type === "SCENEMARKS_VOICE_VIDEO_PRESENCE")
+    .map((message) => message.payload.detected);
+  work.detectorOptions().onContextChange();
+  work.detectorOptions().onContextChange();
+  work.setSnapshot({ detected: false });
+  work.detectorOptions().onContextChange();
+  assert.deepEqual(presence(), [true, false]);
+
+  const plain = loadContent({ seed: { settings: { voice: { enabled: true } } } });
+  await flush();
+  plain.detectorOptions().onContextChange();
+  assert.equal(plain.messages.some((message) => message.type === "SCENEMARKS_VOICE_VIDEO_PRESENCE"), false);
+});

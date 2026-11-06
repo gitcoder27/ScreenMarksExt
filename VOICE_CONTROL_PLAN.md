@@ -1,5 +1,21 @@
 # Voice Control — Implementation Plan
 
+> **Status (2026-11-06): implemented** in Phases 0–3. README → Voice Commands documents the
+> feature; AGENTS.md lists the rules it added. Where the build differs from this plan:
+>
+> - Offscreen documents only get `chrome.runtime`, so the engine cannot listen to
+>   `storage.onChanged`. The worker serves settings and templates (`VOICE_GET_CONFIG`) and
+>   pings the engine on changes (`VOICE_CONFIG_CHANGED`).
+> - Engine status reaches the popup and options over a `BroadcastChannel`, so it never wakes the worker.
+> - The match threshold is calibrated from the user's own repetitions (median same-word DTW
+>   distance), scaled by the sensitivity slider. MFCCs use 25 ms windows with a 10 ms hop.
+> - The VAD also rejects taps, clicks and unvoiced noise (sustain, strike-and-decay, pitch checks),
+>   found necessary in the Phase 0 spike on a MacBook.
+> - "random" opens the video at its first mark through the existing owned queued jump, and joins
+>   the lineup. "mark" saves without the note prompt.
+> - A mic picker was added (system default, or a pinned device with a label fallback).
+> - The speaker-echo check (Phase 0 b) and the wake word were skipped: the user uses headphones.
+
 Hands-free control of SceneMarks: jump between saved timestamps and move through a
 lineup of open videos with short spoken words. Fully local, no AI model, no network,
 no native helper. It's plain browser APIs, so it behaves the same on macOS Brave
