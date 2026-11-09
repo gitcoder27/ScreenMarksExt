@@ -16,7 +16,7 @@ It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#da
 - Settings page showing how much local `chrome.storage` space SceneMarks uses.
 - Browser command shortcuts for quick save, range toggle, and library.
 - Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key when the extension is installed, updated, enabled or reloaded, when the browser starts, and after an import.)
-- Library page with search, filters, favorites, edit/delete, copy share text, export, import, a Random pick button, and a batch Open Random that opens a chosen number of random videos (up to 10 at a time) in new tabs.
+- Library page with search, filters, favorites, edit/delete, copy share text, export, import, a Random pick button, and a batch Open Random that opens a chosen number of random videos in new tabs.
 - Favorites at both levels: star entire videos in the Library or individual timestamps in the Library and popup. The Library favorites filter includes any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.
 - Hands-free [voice commands](#voice-commands) (next, back, pause, play, mark, skip, return, random), recognized locally against your own recorded words, with no AI model and no network.
@@ -43,12 +43,12 @@ The same flow works in Chrome at `chrome://extensions`.
 6. Click **Jump** beside any saved scene to seek back to it.
 7. Use **Overlay On/Off** in the popup to show or hide the draggable page overlay.
 8. Use the overlay **Open Library** button to open saved videos in a private extension page.
-9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite videos and scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick and highlight a random video that is not already open in a tab of the current window. When every matching video is already open, SceneMarks says so instead of re-picking one. To open several at once, set the count next to **Open Random** and click it (or press `Enter` in the count field): that many distinct videos are sampled uniformly at random from the filtered, not-already-open pool and opened in background tabs — asking for more than are available opens all of them. One batch opens at most 10 tabs, since each one loads a full streaming site at once.
+9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite videos and scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick and highlight a random video that is not already open in a tab of the current window. When every matching video is already open, SceneMarks says so instead of re-picking one. To open several at once, set the count next to **Open Random** and click it (or press `Enter` in the count field): that many distinct videos are sampled uniformly at random from the filtered, not-already-open pool and opened in background tabs — asking for more than are available opens all of them.
 10. Star a video in the Library or a timestamp in the Library/popup to include it in the Library favorites filter.
 
 ## Overlay Panel
 
-The draggable overlay offers **Quick Save**, **Mark range start/end**, and **Open Library**. Saved notes, titles, tags, scene lists, favorites and deletion controls are available in extension-origin popup/Library pages. They are never rendered into a visited website's DOM, where page scripts could read them. Overlay actions ignore synthetic events.
+The draggable overlay offers **Quick Save**, **Mark range start/end**, and **Open Library**, and lists the saved timestamps of the video on the page. Click one to jump to it. Those times are the only saved data the overlay shows, so the page can read them while the overlay is on. Saved notes, titles, tags, other videos, favorites and deletion controls are available only in extension-origin popup/Library pages and are never rendered into a visited website's DOM, where page scripts could read them. Overlay actions ignore synthetic events.
 
 SceneMarks shows brief feedback notifications, including above fullscreen players where the browser supports popovers. Overlay capture feedback contains no saved annotations. Private search, favorites, random selection and editing are in the Library page.
 
@@ -219,7 +219,7 @@ Do this first on a normal HTML5 video before trying streaming sites:
    - The star beside a saved scene in the popup toggles its favorite state.
 7. Open Library and confirm search plus export/import, and that a save in another tab shows up without reloading the library page.
 8. Favorite a video from its card header (works while collapsed) and a timestamp from its row, then check **Favorites only**: both videos appear — the favorited video with all its scenes, the other with only the favorited timestamp.
-9. Use overlay **Quick Save**, **Mark range start/end** and **Open Library**. Confirm saved annotations appear only in the popup/Library. Try popup capture while playback continues, customized single-key/numpad shortcuts, and independent Settings changes from two extension pages.
+9. Use overlay **Quick Save**, **Mark range start/end** and **Open Library**. Confirm the overlay lists every saved time of the current video, updates when you save or delete one, and jumps when clicked, while notes and titles appear only in the popup/Library. Try popup capture while playback continues, customized single-key/numpad shortcuts, and independent Settings changes from two extension pages.
 10. Serve the test page over `http://localhost` (for example `python3 -m http.server`) and press **Turn off here** in the popup. Confirm that the overlay disappears, page hotkeys do nothing, and the toolbar badge reads **OFF**. Then open a scene from the Library and confirm the jump still lands. Press **Turn on here** and confirm everything comes back without a reload. Repeat with **Pause everywhere** / **Resume**, which also covers `file://` pages.
 
 Voice commands (headphones recommended):

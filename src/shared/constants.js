@@ -27,9 +27,6 @@
   // An armed delete reverts on its own so a much later second click can never
   // delete a row the user armed and forgot about.
   const ARMED_DELETE_TIMEOUT_MS = 5000;
-  // Batch Open Random opens each pick in its own tab, and every tab loads a
-  // full streaming site at once, so one batch is capped.
-  const MAX_RANDOM_OPEN_COUNT = 10;
   // Saved page URLs per video, newest last. Player URLs carry per-session
   // tokens (Netflix trackId/tctx, YouTube &t=/&pp=), so without a cap every
   // save from a new session grows the state that every write rewrites.
@@ -162,7 +159,6 @@
     LEGACY_STORAGE_KEY,
     MAX_DISABLED_SITES,
     MAX_NOTE_LENGTH,
-    MAX_RANDOM_OPEN_COUNT,
     MAX_RAW_URLS,
     MAX_TAG_LENGTH,
     MAX_TAGS,

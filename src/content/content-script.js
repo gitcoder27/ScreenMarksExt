@@ -37,11 +37,16 @@
   // so concurrent tabs cannot lose each other's read-modify-write updates;
   // reads stay local to this context. Storage is split per video, so the
   // reads here load the current video and a few small keys, not the
-  // library. Private saved content is shown only on extension pages.
+  // library. Private saved content is shown only on extension pages; the
+  // page overlay gets just the current video's times.
   const Storage = SceneMarks.Storage.createClient();
-  const { STORAGE_KEYS } = SceneMarks.Constants;
+  const { STORAGE_KEYS, VIDEO_KEY_PREFIX } = SceneMarks.Constants;
   let settings = null;
   let overlay = null;
+  // The video whose saved times the overlay holds. The sequence number drops
+  // a read that a newer video or storage change has overtaken.
+  let overlayMarksKey = null;
+  let overlayMarksSeq = 0;
   let pendingJumpTimer = null;
   let pendingJumpInFlight = false;
   let ownTabId = null;
@@ -812,7 +817,7 @@
     settings = result.settings;
     const enabled = Boolean(settings && settings.enableFloatingButton);
 
-    if (overlay) overlay.setEnabled(shouldShowOverlay());
+    syncOverlayVisibility();
 
     return { ok: true, message: enabled ? "Overlay shown" : "Overlay hidden" };
   }
@@ -902,9 +907,13 @@
       const settingsChange = changes[STORAGE_KEYS.SETTINGS];
       if (settingsChange) {
         settings = SceneMarks.Schema.normalizeSettings(settingsChange.newValue);
-        if (overlay) {
-          overlay.setEnabled(shouldShowOverlay());
-        }
+        syncOverlayVisibility();
+      }
+
+      const marksChange = overlay && overlayMarksKey && changes[`${VIDEO_KEY_PREFIX}${overlayMarksKey}`];
+      if (marksChange) {
+        overlayMarksSeq += 1;
+        overlay.setMarks(marksChange.newValue ? marksChange.newValue.scenes : []);
       }
 
       if (changes[STORAGE_KEYS.PENDING_JUMP]) schedulePendingJumpCheck(100);
@@ -912,11 +921,37 @@
   }
 
   function syncOverlayVisibility() {
-    if (overlay) overlay.setEnabled(shouldShowOverlay());
+    if (!overlay) return;
+    overlay.setEnabled(shouldShowOverlay());
+    syncOverlayMarks();
+  }
+
+  // Reads one video, and only when the visible overlay needs a different one
+  // than it holds, so a background tab or a page with no video reads nothing.
+  // After that, the storage listener keeps the list current.
+  function syncOverlayMarks() {
+    if (!overlay || document.hidden || !shouldShowOverlay()) return;
+    const snapshot = getCurrentSnapshot();
+    const videoKey = snapshot.detected ? snapshot.videoKey : null;
+    if (videoKey === overlayMarksKey) return;
+    overlayMarksKey = videoKey;
+    const seq = ++overlayMarksSeq;
+    overlay.setMarks(null);
+    if (!videoKey) return;
+    Storage.getScenesForVideo(videoKey).then((scenes) => {
+      if (seq === overlayMarksSeq && overlay) overlay.setMarks(scenes);
+    }).catch((error) => {
+      if (isInvalidContextError(error)) {
+        tearDownDeadContext();
+      } else if (seq === overlayMarksSeq) {
+        overlayMarksKey = null; // The next change or tab focus tries again.
+      }
+    });
   }
 
   function handleVisibilityChange() {
     if (!document.hidden) {
+      syncOverlayMarks();
       schedulePendingJumpCheck(100);
       reportedVideoPresence = null;
       reportVideoPresence();
@@ -995,9 +1030,12 @@
     overlay = SceneMarks.Overlay.createOverlay({
       quickSave: guard(() => isActiveHere() ? saveTimestamp({ quick: true }) : INACTIVE_RESPONSE),
       toggleRange: guard(() => isActiveHere() ? toggleRange({ quick: true }) : INACTIVE_RESPONSE),
-      openLibrary: guard(() => isActiveHere() ? openLibrary() : INACTIVE_RESPONSE)
+      openLibrary: guard(() => isActiveHere() ? openLibrary() : INACTIVE_RESPONSE),
+      jumpToMark: guard((seconds) => isActiveHere()
+        ? seekTo({ seconds, expectedVideoKey: overlayMarksKey })
+        : INACTIVE_RESPONSE)
     });
-    overlay.setEnabled(shouldShowOverlay());
+    syncOverlayVisibility();
   }
 
   async function init() {

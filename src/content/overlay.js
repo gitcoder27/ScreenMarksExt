@@ -1,9 +1,12 @@
 (function attachOverlay(root) {
   const SceneMarks = root.SceneMarks || {};
+  const { formatRange, formatSeconds } = SceneMarks.Time;
 
-  // This DOM belongs to the visited website. Never read or render persisted
-  // titles, notes, tags, favorites, IDs, or library results here. Private
-  // browsing/editing is available only in extension-origin popup/library pages.
+  // This DOM belongs to the visited website. The only saved data allowed here
+  // is the times of the video on this page (setMarks), like the jump toasts.
+  // Never read or render persisted titles, notes, tags, favorites, IDs, or
+  // other videos here. Private browsing/editing is available only in
+  // extension-origin popup/library pages.
   function createOverlay(actions) {
     const host = document.createElement("section");
     host.className = "scenemarks-overlay";
@@ -18,7 +21,15 @@
     const hint = document.createElement("p");
     hint.className = "scenemarks-overlay__status";
     hint.textContent = "View and edit saved scenes in the toolbar popup or Library.";
-    body.append(hint);
+    const marks = document.createElement("div");
+    marks.className = "scenemarks-overlay__marks";
+    marks.hidden = true;
+    const marksStatus = document.createElement("p");
+    marksStatus.className = "scenemarks-overlay__status";
+    const marksList = document.createElement("div");
+    marksList.className = "scenemarks-overlay__mark-list";
+    marks.append(marksStatus, marksList);
+    body.append(hint, marks);
     host.append(header, body);
     let enabled = false;
     let toastTimer = null;
@@ -60,6 +71,47 @@
       });
       body.append(button);
     }
+
+    function createMarkButton(scene, index, total) {
+      const seconds = Number(scene.startSeconds);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "scenemarks-overlay__mark";
+      button.textContent = formatRange(seconds, scene.endSeconds);
+      button.setAttribute("aria-label", `Jump to ${formatSeconds(seconds)}`);
+      button.addEventListener("click", async (event) => {
+        if (!event.isTrusted || !enabled) return;
+        button.disabled = true;
+        try {
+          const result = await actions.jumpToMark(seconds);
+          if (result && result.ok) showToast(`Jumped to ${formatSeconds(seconds)} (${index + 1}/${total})`, "success");
+          else showToast("Could not jump to that timestamp.", "error");
+        } catch (_error) {
+          showToast("Could not jump to that timestamp.", "error");
+        } finally {
+          button.disabled = false;
+          // A mouse click must not leave focus here, or the next Space to
+          // pause the video would press this button and jump again.
+          if (event.detail > 0) button.blur();
+        }
+      });
+      return button;
+    }
+
+    // scenes: the current video's saved scenes in time order, or null when
+    // no video is detected. Only their times are used.
+    function setMarks(scenes) {
+      marks.hidden = !Array.isArray(scenes);
+      if (marks.hidden) {
+        marksList.replaceChildren();
+        return;
+      }
+      marksStatus.textContent = scenes.length
+        ? `Saved timestamps (${scenes.length})`
+        : "No saved timestamps for this video.";
+      marksList.replaceChildren(...scenes.map((scene, index) => createMarkButton(scene, index, scenes.length)));
+    }
+
     addButton("Quick Save", actions.quickSave);
     addButton("Mark range start/end", actions.toggleRange);
     addButton("Open Library", actions.openLibrary);
@@ -83,6 +135,7 @@
     host.hidden = true;
     return {
       setEnabled(value) { enabled = Boolean(value); host.hidden = !enabled; return enabled; },
+      setMarks,
       showToast,
       destroy() { root.clearTimeout(toastTimer); host.remove(); toast.remove(); }
     };

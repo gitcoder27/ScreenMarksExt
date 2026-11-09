@@ -66,6 +66,46 @@
   padding: 10px;
 }
 
+.scenemarks-overlay__marks {
+  display: grid;
+  gap: 6px;
+}
+
+.scenemarks-overlay__marks[hidden] {
+  display: none;
+}
+
+/* Scrolls inside the panel so a long list cannot push the actions off screen. */
+.scenemarks-overlay__mark-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 168px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.scenemarks-overlay__mark {
+  all: initial;
+  background: #1e293b;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1;
+  padding: 6px 8px;
+  user-select: none;
+}
+
+.scenemarks-overlay__mark:hover {
+  background: #334155;
+}
+
 .scenemarks-overlay__secondary {
   all: initial;
   align-items: center;
@@ -83,11 +123,13 @@
   user-select: none;
 }
 
+.scenemarks-overlay__mark:disabled,
 .scenemarks-overlay__secondary:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
 
+.scenemarks-overlay__mark:focus-visible,
 .scenemarks-overlay__secondary:focus-visible {
   outline: 3px solid #60a5fa;
   outline-offset: 2px;

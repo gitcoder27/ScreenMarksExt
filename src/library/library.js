@@ -248,15 +248,11 @@
   }
 
   async function openRandomVideos() {
-    const { MAX_RANDOM_OPEN_COUNT } = SceneMarks.Constants;
-    const requested = Math.floor(Number(elements.randomOpenCount.value));
-    if (!Number.isFinite(requested) || requested < 1) {
+    const count = Math.floor(Number(elements.randomOpenCount.value));
+    if (!Number.isFinite(count) || count < 1) {
       elements.summaryBox.textContent = "Enter how many videos to open (1 or more).";
       return;
     }
-
-    const count = Math.min(requested, MAX_RANDOM_OPEN_COUNT);
-    elements.randomOpenCount.value = String(count);
 
     const videos = getFilteredVideos();
     if (!videos.length) {
@@ -291,8 +287,7 @@
       ? ` (only ${response.openedCount} not already open)`
       : "";
     const suffix = titles.length > 5 ? `, and ${titles.length - 5} more` : "";
-    const capped = requested > count ? ` (at most ${MAX_RANDOM_OPEN_COUNT} at a time)` : "";
-    elements.summaryBox.textContent = `Opened ${response.openedCount} random ${response.openedCount === 1 ? "video" : "videos"}${shortfall}${capped}: ${shown}${suffix}`;
+    elements.summaryBox.textContent = `Opened ${response.openedCount} random ${response.openedCount === 1 ? "video" : "videos"}${shortfall}: ${shown}${suffix}`;
   }
 
   function handleLibraryKeydown(event) {
@@ -731,7 +726,6 @@
     ].forEach((id) => {
       elements[id] = byId(id);
     });
-    elements.randomOpenCount.max = String(SceneMarks.Constants.MAX_RANDOM_OPEN_COUNT);
   }
 
   function bindEvents() {

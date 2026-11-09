@@ -221,9 +221,9 @@ test("an import of legacy data is migrated right after it lands", async () => {
   assert.deepEqual(Object.keys(store.readState().videos), [MIGRATED_KEY]);
 });
 
-test("a batch Open Random opens at most the capped number of tabs", async () => {
+test("a batch Open Random opens as many tabs as asked, up to the videos available", async () => {
   const videos = {};
-  for (let index = 0; index < 15; index += 1) {
+  for (let index = 0; index < 25; index += 1) {
     const id = `video${String(index).padStart(6, "0")}`;
     videos[`youtube:${id}`] = {
       ...legacyVideo(),
@@ -233,16 +233,24 @@ test("a batch Open Random opens at most the capped number of tabs", async () => 
       rawUrls: []
     };
   }
-  const { listeners, openedTabs } = loadWorker(videoEntries(videos));
+  const open = (count) => {
+    const { listeners, openedTabs } = loadWorker(videoEntries(videos));
+    return new Promise((resolve) => {
+      listeners.onMessage[0]({ type: "SCENEMARKS_OPEN_RANDOM_VIDEOS", payload: { count } }, {}, resolve);
+    }).then((response) => ({ response, openedTabs }));
+  };
 
-  const response = await new Promise((resolve) => {
-    listeners.onMessage[0]({ type: "SCENEMARKS_OPEN_RANDOM_VIDEOS", payload: { count: 50 } }, {}, resolve);
-  });
+  const twenty = await open(20);
+  assert.equal(twenty.response.ok, true);
+  assert.equal(twenty.response.openedCount, 20);
+  assert.equal(twenty.response.requestedCount, 20);
+  assert.equal(twenty.openedTabs.length, 20);
+  assert.equal(new Set(twenty.openedTabs.map((tab) => tab.url)).size, 20);
 
-  assert.equal(response.ok, true);
-  assert.equal(response.openedCount, 10);
-  assert.equal(response.requestedCount, 10);
-  assert.equal(openedTabs.length, 10);
+  const tooMany = await open(50);
+  assert.equal(tooMany.response.openedCount, 25);
+  assert.equal(tooMany.response.requestedCount, 50);
+  assert.equal(tooMany.openedTabs.length, 25);
 });
 
 test("the worker's RPC whitelist matches the storage client's mutation methods", () => {

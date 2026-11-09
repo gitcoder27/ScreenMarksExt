@@ -427,12 +427,10 @@ async function openRandomVideo() {
 // each in a background tab so the library page keeps focus.
 async function openRandomVideos(payload) {
   const options = payload && typeof payload === "object" ? payload : {};
-  const requested = Math.floor(Number(options.count));
-  if (!Number.isFinite(requested) || requested < 1) {
+  const count = Math.floor(Number(options.count));
+  if (!Number.isFinite(count) || count < 1) {
     return { ok: false, error: "Choose how many videos to open (1 or more)." };
   }
-
-  const count = Math.min(requested, SceneMarks.Constants.MAX_RANDOM_OPEN_COUNT);
 
   const state = await SceneMarks.Storage.getState();
   let videos = Object.values(state.videos);

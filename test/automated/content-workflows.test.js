@@ -42,10 +42,13 @@ function pageText(work) {
   return visit(work.document.body);
 }
 
-test("overlay never reads saved content and synthetic page events cannot invoke actions", async () => {
+test("overlay reads only the current video and synthetic page events cannot invoke actions", async () => {
   const work = loadContent();
   await flush();
-  assert.deepEqual(work.store.readLog, [["activeRangeDraft", "pendingJump", "settings"]]);
+  assert.deepEqual(work.store.readLog, [
+    ["activeRangeDraft", "pendingJump", "settings"],
+    ["activeRangeDraft", "pendingJump", "settings", `video:${SNAPSHOT.videoKey}`]
+  ]);
   const host = work.document.body.children[0];
   const buttons = host.children[1].children.filter((node) => node.tagName === "BUTTON");
   for (const button of buttons) await button.emit("click", { isTrusted: false });
@@ -53,13 +56,108 @@ test("overlay never reads saved content and synthetic page events cannot invoke 
   assert.equal(work.store.writes, 0);
   await buttons.at(-1).emit("click", { isTrusted: true });
   assert.equal(work.messages.at(-1).type, "SCENEMARKS_OPEN_LIBRARY");
-  assert.equal(work.store.reads, 1);
+  assert.equal(work.store.reads, 2);
   assert.doesNotMatch(pageText(work), /confidential/);
 
   // A valid save returns user content internally; it must never enter DOM.
   work.context.SceneMarks.Storage.saveScene = async () => ({ ok: true, scene: { note: "confidential" } });
   await buttons[0].emit("click", { isTrusted: true });
   assert.doesNotMatch(pageText(work), /confidential/);
+});
+
+const OTHER_KEY = "generic:v2:https://example.com/watch?id=B";
+
+function savedVideo(videoKey, scenes) {
+  return {
+    videoKey, platform: "generic", title: "confidential title", canonicalUrl: "https://example.com/watch",
+    rawUrls: [], favorite: false, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    scenes: scenes.map((scene) => ({
+      note: "confidential note", tags: ["confidential-tag"], endSeconds: null, favorite: false,
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", ...scene
+    }))
+  };
+}
+
+function savedLibrary() {
+  return {
+    schemaVersion: 3,
+    [`video:${SNAPSHOT.videoKey}`]: savedVideo(SNAPSHOT.videoKey, [
+      { id: "late", startSeconds: 130 },
+      { id: "range", startSeconds: 10, endSeconds: 25 }
+    ]),
+    [`video:${OTHER_KEY}`]: savedVideo(OTHER_KEY, [{ id: "other", startSeconds: 999 }])
+  };
+}
+
+function overlayMarks(work) {
+  const body = work.document.body.children[0].children[1];
+  const section = body.children.find((node) => node.className === "scenemarks-overlay__marks");
+  return { section, status: section.children[0], buttons: section.children[1].children };
+}
+
+const markTexts = (work) => overlayMarks(work).buttons.map((button) => button.textContent);
+
+test("overlay lists every saved time of the current video and nothing else", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  assert.deepEqual(markTexts(work), ["00:10 -> 00:25", "02:10"]);
+  assert.equal(overlayMarks(work).section.hidden, false);
+  assert.equal(overlayMarks(work).status.textContent, "Saved timestamps (2)");
+  assert.doesNotMatch(pageText(work), /confidential|16:39/);
+  assert.equal(work.store.readLog.flat().includes(`video:${OTHER_KEY}`), false);
+});
+
+test("overlay timestamps jump on a trusted click and ignore synthetic ones", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  const [, late] = overlayMarks(work).buttons;
+  await late.emit("click", { isTrusted: false });
+  assert.equal(work.seeks.length, 0);
+  await late.emit("click", { isTrusted: true });
+  assert.equal(work.seeks.length, 1);
+  assert.equal(work.seeks[0].seconds, 130);
+  assert.equal(work.seeks[0].opts.expectedVideoKey, SNAPSHOT.videoKey);
+  assert.equal(work.document.body.children[1].textContent, "Jumped to 02:10 (2/2)");
+});
+
+test("overlay list follows saves without a re-read and follows the video when it changes", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  const readsBefore = work.store.reads;
+  const updated = savedVideo(SNAPSHOT.videoKey, [
+    { id: "range", startSeconds: 10, endSeconds: 25 },
+    { id: "new", startSeconds: 60 },
+    { id: "late", startSeconds: 130 }
+  ]);
+  for (const listener of work.changed) listener({ [`video:${SNAPSHOT.videoKey}`]: { newValue: updated } }, "local");
+  await flush();
+  assert.deepEqual(markTexts(work), ["00:10 -> 00:25", "01:00", "02:10"]);
+  assert.equal(work.store.reads, readsBefore);
+
+  for (const listener of work.changed) listener({ [`video:${SNAPSHOT.videoKey}`]: { oldValue: updated } }, "local");
+  assert.deepEqual(markTexts(work), []);
+  assert.equal(overlayMarks(work).status.textContent, "No saved timestamps for this video.");
+
+  work.setSnapshot({ videoKey: OTHER_KEY });
+  work.detectorOptions().onContextChange();
+  await flush();
+  assert.deepEqual(markTexts(work), ["16:39"]);
+
+  work.setSnapshot({ detected: false, videoKey: null });
+  work.detectorOptions().onContextChange();
+  await flush();
+  assert.equal(overlayMarks(work).section.hidden, true);
+});
+
+test("a hidden overlay reads no video until it is shown", async () => {
+  const seed = savedLibrary();
+  seed.settings = { enableFloatingButton: false };
+  const work = loadContent({ seed });
+  await flush();
+  assert.equal(work.store.readLog.flat().includes(`video:${SNAPSHOT.videoKey}`), false);
+  await work.context.SceneMarks.Storage.updateSettings({ enableFloatingButton: true });
+  await flush();
+  assert.deepEqual(markTexts(work), ["00:10 -> 00:25", "02:10"]);
 });
 
 test("capture commands use the frozen timestamp and reject changed video identity", async () => {
