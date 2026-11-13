@@ -1,6 +1,104 @@
-(function initializeLibrary() {
-  const Storage = SceneMarks.Storage.createClient();
+(function initializeLibrary(root) {
+  const SceneMarks = root.SceneMarks;
   const { formatRange } = SceneMarks.Time;
+
+  // ---- Pure view helpers. Exposed as SceneMarks.LibraryView for tests. ----
+
+  const SORT_IDS = Object.freeze(["recent", "added", "scenes", "title", "platform"]);
+  const DEFAULT_SORT = "recent";
+  const SORT_STORAGE_KEY = "scenemarks.library.sort";
+  const PLATFORM_LABELS = Object.freeze({
+    netflix: "Netflix",
+    prime: "Prime Video",
+    hotstar: "Hotstar",
+    youtube: "YouTube",
+    generic: "Other sites",
+    unknown: "Unknown"
+  });
+  const titleCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+  function platformLabel(platform) {
+    const value = String(platform || "unknown");
+    return PLATFORM_LABELS[value] || value.charAt(0).toUpperCase() + value.slice(1);
+  }
+
+  function plural(count, singular, pluralWord) {
+    return `${count} ${count === 1 ? singular : pluralWord || `${singular}s`}`;
+  }
+
+  // "Recently saved" is the newest scene's createdAt, falling back to the
+  // video's. createdAt never changes after a save, so starring, editing a
+  // note or a merge import (all of which bump updatedAt) leave the order be.
+  function lastSavedAt(video) {
+    let newest = "";
+    for (const scene of video.scenes || []) {
+      if (scene.createdAt && scene.createdAt > newest) {
+        newest = scene.createdAt;
+      }
+    }
+    return newest || video.createdAt || "";
+  }
+
+  function descending(left, right) {
+    return left < right ? 1 : left > right ? -1 : 0;
+  }
+
+  function byTitle(left, right) {
+    // Untitled videos go last; equal titles fall back to the key so the
+    // order is total and does not shuffle between renders.
+    return (!left.title) - (!right.title)
+      || titleCollator.compare(left.title, right.title)
+      || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+  }
+
+  function byRecent(left, right) {
+    return descending(left.saved, right.saved) || byTitle(left, right);
+  }
+
+  const COMPARATORS = Object.freeze({
+    recent: byRecent,
+    added: (left, right) => descending(left.added, right.added) || byRecent(left, right),
+    scenes: (left, right) => right.sceneCount - left.sceneCount || byRecent(left, right),
+    title: byTitle,
+    platform: (left, right) => titleCollator.compare(left.platform, right.platform) || byRecent(left, right)
+  });
+
+  function normalizeSortId(sortId) {
+    return SORT_IDS.includes(sortId) ? sortId : DEFAULT_SORT;
+  }
+
+  // Sort keys are computed once per video, not once per comparison.
+  function sortVideos(videos, sortId) {
+    const comparator = COMPARATORS[normalizeSortId(sortId)];
+    return videos
+      .map((video) => ({
+        video,
+        key: video.videoKey,
+        title: String(video.title || "").trim(),
+        saved: lastSavedAt(video),
+        added: video.createdAt || "",
+        sceneCount: (video.scenes || []).length,
+        platform: platformLabel(video.platform)
+      }))
+      .sort(comparator)
+      .map((entry) => entry.video);
+  }
+
+  SceneMarks.LibraryView = Object.freeze({
+    SORT_IDS,
+    DEFAULT_SORT,
+    platformLabel,
+    lastSavedAt,
+    sortVideos
+  });
+
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  // ---- The page. ----
+
+  const Storage = SceneMarks.Storage.createClient();
   // The list re-renders from scratch, so keystrokes are batched into one
   // render shortly after typing stops.
   const SEARCH_RENDER_DEBOUNCE_MS = 150;
@@ -8,6 +106,7 @@
   const elements = {};
   let state = null;
   let searchRenderTimer = null;
+  let sortId = DEFAULT_SORT;
   const expandedVideoKeys = new Set();
   // The filtered videos from the last render, so a collapsed card can build
   // its scene rows when it is first expanded.
@@ -97,6 +196,7 @@
     const haystack = [
       video.title,
       video.platform,
+      platformLabel(video.platform),
       video.canonicalUrl,
       ...video.rawUrls
     ].join(" ").toLowerCase();
@@ -109,7 +209,9 @@
     const platform = elements.platformFilter.value;
     const favoritesOnly = elements.favoritesOnly.checked;
 
-    return Object.values(state.videos)
+    // Sorted before filtering, on the whole videos, so the order does not
+    // depend on which scenes the filters let through.
+    return sortVideos(Object.values(state.videos), sortId)
       .filter((video) => platform === "all" || video.platform === platform)
       .filter((video) => videoMatches(video, query))
       .map((video) => {
@@ -133,15 +235,38 @@
         }
 
         return video.scenes.length > 0 || videoMatches(video, query);
-      })
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      });
+  }
+
+  function readSavedSort() {
+    try {
+      return normalizeSortId(root.localStorage.getItem(SORT_STORAGE_KEY));
+    } catch (_error) {
+      return DEFAULT_SORT;
+    }
+  }
+
+  function saveSort(value) {
+    try {
+      root.localStorage.setItem(SORT_STORAGE_KEY, value);
+    } catch (_error) {
+      // The page works without it; the choice is just not remembered.
+    }
+  }
+
+  function changeSort() {
+    sortId = normalizeSortId(elements.sortSelect.value);
+    elements.sortSelect.value = sortId;
+    saveSort(sortId);
+    render();
   }
 
   let lastPlatformSignature = null;
 
   function renderPlatformOptions() {
     const selected = elements.platformFilter.value || "all";
-    const platforms = Array.from(new Set(Object.values(state.videos).map((video) => video.platform))).sort();
+    const platforms = Array.from(new Set(Object.values(state.videos).map((video) => video.platform)))
+      .sort((left, right) => titleCollator.compare(platformLabel(left), platformLabel(right)));
     const signature = platforms.join("|");
 
     if (signature === lastPlatformSignature) {
@@ -159,7 +284,7 @@
     platforms.forEach((platform) => {
       const option = document.createElement("option");
       option.value = platform;
-      option.textContent = platform;
+      option.textContent = platformLabel(platform);
       elements.platformFilter.append(option);
     });
 
@@ -180,12 +305,12 @@
     clearNode(elements.libraryList);
     renderedVideos.clear();
     videos.forEach((video) => renderedVideos.set(video.videoKey, video));
-    elements.summaryBox.textContent = `${videos.length} videos, ${sceneCount} scenes`
-      + (favoriteVideoCount ? `, ${favoriteVideoCount} favorited videos` : "")
-      + (favoriteSceneCount ? `, ${favoriteSceneCount} favorited timestamps` : "");
+    elements.summaryBox.textContent = `${plural(videos.length, "video")}, ${plural(sceneCount, "scene")}`
+      + (favoriteVideoCount ? `, ${plural(favoriteVideoCount, "favorite video")}` : "")
+      + (favoriteSceneCount ? `, ${plural(favoriteSceneCount, "favorite moment")}` : "");
 
     if (!videos.length) {
-      elements.libraryList.append(createElement("p", "empty-state", "No saved scenes match the current filters."));
+      elements.libraryList.append(createElement("p", "empty-state", emptyMessage()));
     } else {
       videos.forEach((video) => elements.libraryList.append(renderVideo(video)));
     }
@@ -196,6 +321,16 @@
     if (window.scrollY !== scrollY) {
       window.scrollTo(0, scrollY);
     }
+  }
+
+  function emptyMessage() {
+    if (Object.keys(state.videos).length) {
+      return "No saved scenes match the current filters.";
+    }
+
+    const { DEFAULT_SETTINGS } = SceneMarks.Constants;
+    const hotkeys = (state.settings && state.settings.hotkeys) || DEFAULT_SETTINGS.hotkeys;
+    return `Your library is empty. On a video page, press ${hotkeys.quickSave} or use the SceneMarks popup to save a moment, and it will show up here.`;
   }
 
   let lastRandomPickKey = null;
@@ -384,7 +519,7 @@
     if (video.identityRepairRequired) {
       details.append(createElement("p", "hint", "Legacy video identity is ambiguous. Export a backup, separate its scenes into the correct video records in the JSON, and re-import after removing this legacy entry. Keep the original backup until verified."));
     }
-    const platform = createElement("span", "platform-pill", video.platform);
+    const platform = createElement("span", "platform-pill", platformLabel(video.platform));
     // The Random pick stays marked until the next pick, across re-renders.
     const isRandomPick = video.videoKey === lastRandomPickKey;
     card.classList.toggle("is-random-current", isRandomPick);
@@ -396,7 +531,7 @@
 
     const caret = createElement("span", "video-title-caret", isCollapsed ? "+" : "-");
     const titleText = createElement("span", "video-title", video.title || "Untitled video");
-    const sceneCount = createElement("span", "video-title-count", `${video.scenes.length} scenes`);
+    const sceneCount = createElement("span", "video-title-count", plural(video.scenes.length, "scene"));
     const url = createElement("p", "video-url", video.canonicalUrl || video.rawUrls[0] || video.videoKey);
     const actions = createElement("div", "video-actions");
 
@@ -762,6 +897,7 @@
       "openOptionsButton",
       "searchInput",
       "platformFilter",
+      "sortSelect",
       "favoritesOnly",
       "playQueueButton",
       "playQueueShuffle",
@@ -791,6 +927,7 @@
       searchRenderTimer = window.setTimeout(render, SEARCH_RENDER_DEBOUNCE_MS);
     });
     elements.platformFilter.addEventListener("change", render);
+    elements.sortSelect.addEventListener("change", changeSort);
     elements.favoritesOnly.addEventListener("change", render);
     elements.playQueueButton.addEventListener("click", playFilteredScenes);
     elements.randomVideoButton.addEventListener("click", pickRandomVideo);
@@ -818,8 +955,10 @@
 
   document.addEventListener("DOMContentLoaded", async () => {
     bindElements();
+    sortId = readSavedSort();
+    elements.sortSelect.value = sortId;
     bindEvents();
     installStorageSync();
     await loadState();
   });
-})();
+})(globalThis);

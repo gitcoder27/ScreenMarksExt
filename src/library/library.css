@@ -97,7 +97,8 @@ h1 {
   min-width: 160px;
 }
 
-.toolbar #platformFilter {
+.toolbar #platformFilter,
+.toolbar #sortSelect {
   flex: 0 0 auto;
   padding: 0 10px;
 }
@@ -235,7 +236,6 @@ select {
   font-weight: 900;
   margin-bottom: 6px;
   padding: 3px 8px;
-  text-transform: capitalize;
 }
 
 .video-title-button {

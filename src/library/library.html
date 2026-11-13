@@ -21,6 +21,13 @@
       <section class="toolbar" aria-label="Library filters">
         <input id="searchInput" type="search" placeholder="Search title, note, or tag" aria-label="Search title, note, or tag">
         <select id="platformFilter" aria-label="Filter by platform"></select>
+        <select id="sortSelect" aria-label="Sort videos" title="Sort videos">
+          <option value="recent">Recently saved</option>
+          <option value="added">Date added</option>
+          <option value="scenes">Most scenes</option>
+          <option value="title">Title</option>
+          <option value="platform">Platform</option>
+        </select>
         <label class="favorite-filter" title="Show favorites only">
           <input id="favoritesOnly" type="checkbox">
           <span class="favorite-filter__star" aria-hidden="true">&#9733;</span>
