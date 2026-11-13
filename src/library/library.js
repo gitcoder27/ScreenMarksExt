@@ -338,6 +338,9 @@
       details.append(createElement("p", "hint", "Legacy video identity is ambiguous. Export a backup, separate its scenes into the correct video records in the JSON, and re-import after removing this legacy entry. Keep the original backup until verified."));
     }
     const platform = createElement("span", "platform-pill", video.platform);
+    // The Random pick stays marked until the next pick, across re-renders.
+    const isRandomPick = video.videoKey === lastRandomPickKey;
+    card.classList.toggle("is-random-current", isRandomPick);
     const title = document.createElement("button");
     title.type = "button";
     title.className = "video-title-button";
@@ -357,7 +360,11 @@
       createButton("Delete Video", () => deleteVideo(video))
     );
 
-    details.append(platform, title, url);
+    details.append(platform);
+    if (isRandomPick) {
+      details.append(createElement("span", "random-pick-pill", "Random pick \u00b7 Open it, or press R for another"));
+    }
+    details.append(title, url);
     header.append(details, actions);
     card.append(header);
 

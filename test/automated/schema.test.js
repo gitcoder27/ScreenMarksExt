@@ -299,3 +299,14 @@ test("an old settings object with quickSaveRequiresNote normalizes cleanly witho
   assert.equal(settings.duplicateThresholdSeconds, 5);
   assert.equal("quickSaveRequiresNote" in SceneMarks.Constants.DEFAULT_SETTINGS, false);
 });
+
+test("normalizeHotkeys fills the lineup hotkeys from defaults and keeps custom ones", () => {
+  const defaults = Schema.normalizeSettings({ hotkeys: {} }).hotkeys;
+  assert.equal(defaults.lineupNext, "Alt+Shift+K");
+  assert.equal(defaults.lineupPrevious, "Alt+Shift+J");
+  const custom = Schema.normalizeSettings({ hotkeys: { lineupNext: "Alt+Shift+9", lineupPrevious: "Alt+Shift+8" } }).hotkeys;
+  assert.equal(custom.lineupNext, "Alt+Shift+9");
+  assert.equal(custom.lineupPrevious, "Alt+Shift+8");
+  const values = Object.values(defaults);
+  assert.equal(new Set(values).size, values.length, "every default hotkey is distinct");
+});

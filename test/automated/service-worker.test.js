@@ -822,3 +822,92 @@ test("without only-with-video, tab switches send the engine nothing", async () =
   assert.deepEqual(work.runtimeMessages, []);
   assert.equal(work.tabMessages.length, 0);
 });
+
+// ---- H1: one Random, lineup hotkeys ---------------------------------------
+test("the Random hotkey opens an unopened video through an owned jump to its first mark", async () => {
+  const videos = { vidAAAAAAA1: videoEntry("vidAAAAAAA1"), vidBBBBBBB2: videoEntry("vidBBBBBBB2") };
+  const tabs = [{ id: 21, windowId: 1, index: 0, active: true, url: "https://www.youtube.com/watch?v=vidAAAAAAA1" }];
+  const work = loadWorker(videoEntries(videos), { tabs });
+  await settle();
+  const response = await sendToWorker(work.listeners, { type: "SCENEMARKS_OPEN_RANDOM_VIDEO" }, { tab: { id: 21 }, frameId: 0 });
+  assert.equal(response.ok, true);
+  assert.equal(response.nothingToOpen, undefined);
+  const jump = work.store.raw("pendingJump");
+  assert.equal(jump.videoKey, "youtube:vidBBBBBBB2");
+  assert.equal(jump.seconds, 83);
+  assert.equal(jump.targetTabId, 1001);
+  // Nothing left to open: a plain error, and no announcement (the hotkey
+  // shows its own toast).
+  tabs.push({ id: 1001, windowId: 1, index: 1, active: false, url: "https://www.youtube.com/watch?v=vidBBBBBBB2" });
+  const none = await sendToWorker(work.listeners, { type: "SCENEMARKS_OPEN_RANDOM_VIDEO" }, { tab: { id: 21 }, frameId: 0 });
+  assert.equal(none.ok, false);
+  assert.equal(none.nothingToOpen, undefined);
+  assert.equal(voiceActions(work).length, 0);
+});
+
+test("batch Open Random tabs start at their first mark the first time they are shown", async () => {
+  const videos = Object.fromEntries(["vidAAAAAAA1", "vidBBBBBBB2"].map((id) => [id, videoEntry(id)]));
+  const tabs = [];
+  const work = loadWorker(videoEntries(videos), { tabs });
+  await settle();
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_OPEN_RANDOM_VIDEOS", payload: { count: 2 } },
+    { url: "chrome-extension://scenemarks/src/library/library.html" });
+  tabs.push({ id: 1001, windowId: 1, index: 0, url: "https://www.youtube.com/watch?v=vidAAAAAAA1" },
+    { id: 1002, windowId: 1, index: 1, url: "https://www.youtube.com/watch?v=vidBBBBBBB2" });
+  const activate = async (tabId) => {
+    work.listeners["tabs.onActivated"].forEach((listener) => listener({ tabId, windowId: 1 }));
+    await settle();
+  };
+  await activate(1002);
+  assert.deepEqual(voiceActions(work), [{ tabId: 1002, action: "startAtFirstMark", position: 2, total: 2, kind: "lineup" }]);
+  // Shown again later: left alone.
+  await activate(1002);
+  await activate(77);
+  assert.equal(voiceActions(work).length, 1);
+});
+
+test("lineup hotkeys step from the active tab, and start the target at its first mark", async () => {
+  const { work } = lineupBrowser({ activeId: 21, lineup: [21, 22, 23] });
+  work.session.lineupUnstarted = [22, 23];
+  await settle();
+  const sender = (id, active = true) => ({ tab: { id, active, windowId: 1, url: "https://www.youtube.com/watch?v=vidAAAAAAA1" }, frameId: 0,
+    url: "https://www.youtube.com/watch?v=vidAAAAAAA1" });
+  const response = await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_NEXT" }, sender(21));
+  assert.equal(response.ok, true);
+  assert.deepEqual(work.updatedTabs, [{ id: 22, active: true }]);
+  assert.deepEqual(voiceActions(work), [
+    { tabId: 21, action: "pause", silent: true },
+    { tabId: 22, action: "startAtFirstMark", position: 2, total: 3, kind: "lineup" }
+  ]);
+  // Started by the step, so its first activation does not start it again.
+  assert.deepEqual([...work.session.lineupUnstarted], [23]);
+
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_PREVIOUS" }, sender(21));
+  assert.deepEqual(work.updatedTabs.at(-1), { id: 23, active: true });
+});
+
+test("lineup step messages are refused from pages, extension pages and background tabs, and do nothing without a lineup", async () => {
+  const { work } = lineupBrowser({ activeId: 21, lineup: [21, 22, 23] });
+  await settle();
+  for (const sender of [
+    {},
+    { url: "chrome-extension://scenemarks/src/popup/popup.html" },
+    { url: "chrome-extension://scenemarks/src/library/library.html", tab: { id: 30, active: true }, frameId: 0 },
+    { url: "https://example.com/", tab: { id: 22, active: false }, frameId: 0 },
+    { url: "https://example.com/", tab: { id: 21, active: true }, frameId: 3 }
+  ]) {
+    const response = await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_NEXT" }, sender);
+    assert.equal(response.ok, false);
+  }
+  assert.deepEqual(work.updatedTabs, []);
+  assert.deepEqual(work.tabMessages, []);
+
+  const empty = lineupBrowser({ activeId: 21, lineup: [] });
+  await settle();
+  const response = await sendToWorker(empty.work.listeners, { type: "SCENEMARKS_LINEUP_NEXT" },
+    { url: "https://www.youtube.com/watch?v=vidAAAAAAA1", tab: { id: 21, active: true }, frameId: 0 });
+  assert.equal(response.ok, false);
+  assert.match(response.error, /No lineup/);
+  assert.deepEqual(empty.work.updatedTabs, []);
+  assert.deepEqual(empty.work.tabMessages, []);
+});

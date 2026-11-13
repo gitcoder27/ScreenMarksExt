@@ -72,7 +72,9 @@
       previousScene: "Alt+Shift+B",
       randomVideo: "Alt+Shift+R",
       toggleOverlay: "Alt+Shift+O",
-      openLibrary: "Alt+Shift+L"
+      openLibrary: "Alt+Shift+L",
+      lineupNext: "Alt+Shift+K",
+      lineupPrevious: "Alt+Shift+J"
     })
   });
 
@@ -94,6 +96,10 @@
     OPEN_RANDOM_VIDEO: "SCENEMARKS_OPEN_RANDOM_VIDEO",
     OPEN_RANDOM_VIDEOS: "SCENEMARKS_OPEN_RANDOM_VIDEOS",
     PICK_RANDOM_VIDEO: "SCENEMARKS_PICK_RANDOM_VIDEO",
+    // Content script (page hotkey) -> worker: next / previous video in the
+    // lineup, at its first saved mark. Accepted only from the active tab.
+    LINEUP_NEXT: "SCENEMARKS_LINEUP_NEXT",
+    LINEUP_PREVIOUS: "SCENEMARKS_LINEUP_PREVIOUS",
     GET_ACTIVE_TAB_CONTEXT: "SCENEMARKS_GET_ACTIVE_TAB_CONTEXT",
     FORWARD_TO_ACTIVE_TAB: "SCENEMARKS_FORWARD_TO_ACTIVE_TAB",
     STORAGE_RPC: "SCENEMARKS_STORAGE_RPC",

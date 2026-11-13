@@ -76,6 +76,8 @@
       "randomVideoHotkey",
       "toggleOverlayHotkey",
       "openLibraryHotkey",
+      "lineupNextHotkey",
+      "lineupPreviousHotkey",
       "openBrowserShortcutsButton",
       "clearDataButton",
       "storageMeterBar",

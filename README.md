@@ -18,7 +18,8 @@ It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#da
 - Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key when the extension is installed, updated, enabled or reloaded, when the browser starts, and after an import.)
 - Library page with search, filters, favorites, edit/delete, copy share text, export, import, a Random pick button, and a batch Open Random that opens a chosen number of random videos in new tabs.
 - Favorites at both levels: star entire videos in the Library or individual timestamps in the Library and popup. The Library favorites filter includes any video that is favorited itself or has a favorited timestamp.
-- Random video shortcut that opens a random saved video, skipping videos already open in tabs of the current window.
+- Random video shortcut that opens a random saved video at its first saved timestamp, skipping videos already open in tabs of the current window.
+- A lineup of the videos the Library's batch **Open Random** opened: each starts at its first saved timestamp the first time you look at it, and `Alt+Shift+K` / `Alt+Shift+J` step to the next or previous one.
 - Hands-free [voice commands](#voice-commands) (next, back, pause, play, mark, skip, return, random), recognized locally against your own recorded words, with no AI model and no network.
 - Permissions: `storage`, `unlimitedStorage`, `activeTab`, `scripting`, `tabs`, and `offscreen`, plus an `<all_urls>` host permission so content scripts (video detection, overlay, queued jumps) run on every page without popup activation. `unlimitedStorage` lifts the 10 MB `chrome.storage.local` cap; Chrome shows no permission warning for it. `offscreen` lets the voice listener run in a hidden extension page, so the microphone permission belongs to SceneMarks rather than to the video sites.
 
@@ -43,7 +44,7 @@ The same flow works in Chrome at `chrome://extensions`.
 6. Click **Jump** beside any saved scene to seek back to it.
 7. Use **Overlay On/Off** in the popup to show or hide the draggable page overlay.
 8. Use the overlay **Open Library** button to open saved videos in a private extension page.
-9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite videos and scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick and highlight a random video that is not already open in a tab of the current window. When every matching video is already open, SceneMarks says so instead of re-picking one. To open several at once, set the count next to **Open Random** and click it (or press `Enter` in the count field): that many distinct videos are sampled uniformly at random from the filtered, not-already-open pool and opened in background tabs — asking for more than are available opens all of them.
+9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite videos and scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick a random video that is not already open in a tab of the current window; its card stays outlined and labelled **Random pick** until the next pick. When every matching video is already open, SceneMarks says so instead of re-picking one. To open several at once, set the count next to **Open Random** and click it (or press `Enter` in the count field): that many distinct videos are sampled uniformly at random from the filtered, not-already-open pool and opened in background tabs — asking for more than are available opens all of them. Those tabs become the [lineup](#the-lineup): each one starts at its first saved timestamp the first time you switch to it.
 10. Star a video in the Library or a timestamp in the Library/popup to include it in the Library favorites filter.
 
 ## Overlay Panel
@@ -76,11 +77,13 @@ Default page hotkeys:
 - `Alt+Shift+D`: mark range end only.
 - `Alt+Shift+N`: jump to the next saved timestamp for the current video. Press repeatedly to rotate through all saved timestamps from the beginning. The confirmation toast shows where you landed among the video's saved scenes, e.g. `Jumped to 04:12 (4/10)`; the backwards hotkey shows the same counter.
 - `Alt+Shift+B`: jump back through saved timestamps for the current video. It skips the most recent previous timestamp — the one you just jumped to or are still near — and lands on the one before it, so repeated presses keep cycling backwards instead of re-landing on the same timestamp while playback moves on. At the first saved timestamp it wraps to the last one.
-- `Alt+Shift+R`: open a random video from the library. Videos already open in a tab of the current window are never picked, so repeated jumps keep surfacing videos you have not opened yet. Open-tab matching uses service adapter identities (including YouTube watch/shorts/short-link variants). Generic matching preserves case-sensitive paths, content query parameters and fragments while removing known tracking parameters. Library Random controls use the same matching.
+- `Alt+Shift+R`: open a random video from the library at its first saved timestamp (only videos with at least one saved timestamp are picked). Videos already open in a tab of the current window are never picked, so repeated jumps keep surfacing videos you have not opened yet. Open-tab matching uses service adapter identities (including YouTube watch/shorts/short-link variants). Generic matching preserves case-sensitive paths, content query parameters and fragments while removing known tracking parameters. Library Random controls use the same matching.
 - `Alt+Shift+O`: show or hide the overlay panel.
 - `Alt+Shift+L`: open library.
+- `Alt+Shift+K`: next video in the [lineup](#the-lineup), at its first saved timestamp.
+- `Alt+Shift+J`: previous video in the lineup, at its first saved timestamp.
 
-To customize page hotkeys, open SceneMarks popup, click **Hotkeys**, then use the recorder fields in Settings. Single-key shortcuts are supported: click **Record** and press one key, for example just `S`, with no modifier. Press `Escape` while recording to cancel. Page hotkeys are ignored while you type in text fields.
+To customize page hotkeys, open SceneMarks popup, click **Settings**, then use the recorder fields in Settings. Single-key shortcuts are supported: click **Record** and press one key, for example just `S`, with no modifier. Press `Escape` while recording to cancel. Page hotkeys are ignored while you type in text fields.
 
 Page hotkeys are registered at `document_start`, synchronously before waiting for settings. Shortcuts pass through while settings load; accepted matches stop propagation before running an action. Saved settings reach open tabs immediately. Reload video tabs after updating extension code. Numpad keys keep their own physical-key identity, separately from main-keyboard digits and Enter.
 
@@ -126,7 +129,9 @@ The microphone is used raw: the browser's call processing (noise suppression, au
 
 ### The lineup
 
-**skip** and **return** move through the videos that the Library's batch **Open Random** opened, in the order it opened them, wrapping around at the ends. Each new batch replaces the previous lineup, and a video opened by voice **random** joins its end. If the active tab is not in the lineup, **skip** goes to its first video and **return** to its last. Closed tabs drop out. Without a lineup, **skip** and **return** move to the next or previous web tab in the window.
+The lineup also works without voice: `Alt+Shift+K` and `Alt+Shift+J` (page hotkeys, changeable in Settings) move to the next and previous lineup video the same way. Without a lineup they do nothing but say so; unlike **skip** and **return** they never fall back to plain tabs. A batch-opened video also starts at its first saved timestamp the first time you switch to it by clicking its tab.
+
+**skip** and **return** move through the videos that the Library's batch **Open Random** opened, in the order it opened them, wrapping around at the ends. Each new batch replaces the previous lineup, and a video opened by voice **random** or `Alt+Shift+R` joins its end. If the active tab is not in the lineup, **skip** goes to its first video and **return** to its last. Closed tabs drop out. Without a lineup, **skip** and **return** move to the next or previous web tab in the window.
 
 Switching pauses the video you are leaving, brings the next tab to the front, waits up to about 10 seconds for its player to load, then plays from its first saved timestamp. A video with no saved timestamps just plays. If the site blocks playback that was not started by a click, the toast says **press Space to play**.
 
@@ -221,6 +226,7 @@ Do this first on a normal HTML5 video before trying streaming sites:
 8. Favorite a video from its card header (works while collapsed) and a timestamp from its row, then check **Favorites only**: both videos appear — the favorited video with all its scenes, the other with only the favorited timestamp.
 9. Use overlay **Quick Save**, **Mark range start/end** and **Open Library**. Confirm the overlay lists every saved time of the current video, updates when you save or delete one, and jumps when clicked, while notes and titles appear only in the popup/Library. Try popup capture while playback continues, customized single-key/numpad shortcuts, and independent Settings changes from two extension pages.
 10. Serve the test page over `http://localhost` (for example `python3 -m http.server`) and press **Turn off here** in the popup. Confirm that the overlay disappears, page hotkeys do nothing, and the toolbar badge reads **OFF**. Then open a scene from the Library and confirm the jump still lands. Press **Turn on here** and confirm everything comes back without a reload. Repeat with **Pause everywhere** / **Resume**, which also covers `file://` pages.
+11. With voice off, batch **Open Random** 3 videos in the Library, click the first one's tab and confirm it starts at its first saved timestamp, then press `Alt+Shift+K` / `Alt+Shift+J` to move between them. Press `Alt+Shift+R` and confirm the new video opens at its first saved timestamp.
 
 Voice commands (headphones recommended):
 

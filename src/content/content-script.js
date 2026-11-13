@@ -368,7 +368,7 @@
   }
 
   function showFeedback(result) {
-    if (!overlay || !result) return;
+    if (!overlay || !result || result.quiet) return;
     if (result.feedback) {
       overlay.showToast(result.feedback.text, result.feedback.tone);
     } else if (result.error) {
@@ -826,14 +826,28 @@
     return chrome.runtime.sendMessage({ type: MESSAGE_TYPES.OPEN_LIBRARY });
   }
 
+  // Opens a saved video that is not open yet, at its first saved mark.
   async function openRandomVideoFromLibrary() {
     const response = await chrome.runtime.sendMessage({
       type: MESSAGE_TYPES.OPEN_RANDOM_VIDEO
     });
 
     return response && response.ok
-      ? { ok: true, message: "Opening a random saved video" }
-      : response || { ok: false, error: "Could not open a random video." };
+      ? { ok: true, message: "Opening a random video at its first mark" }
+      : { ok: false, error: (response && response.error) || "Could not open a random video." };
+  }
+
+  // The worker switches tabs and the video switched to shows where it
+  // landed, so a success needs no toast here. The worker accepts this only
+  // from the active tab, and the hotkey listener only from trusted keys.
+  async function stepLineup(direction) {
+    const response = await chrome.runtime.sendMessage({
+      type: direction > 0 ? MESSAGE_TYPES.LINEUP_NEXT : MESSAGE_TYPES.LINEUP_PREVIOUS
+    });
+
+    return response && response.ok
+      ? { ok: true, quiet: true }
+      : { ok: false, error: (response && response.error) || "Could not switch videos." };
   }
 
   async function toggleOverlayVisibility() {
@@ -882,6 +896,10 @@
         action = toggleOverlayVisibility;
       } else if (shortcutMatches(event, hotkeys.openLibrary)) {
         action = openLibrary;
+      } else if (shortcutMatches(event, hotkeys.lineupNext)) {
+        action = () => stepLineup(1);
+      } else if (shortcutMatches(event, hotkeys.lineupPrevious)) {
+        action = () => stepLineup(-1);
       }
 
       if (!action) {

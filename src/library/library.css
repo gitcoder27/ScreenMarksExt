@@ -381,6 +381,22 @@ select {
   margin-top: 16px;
 }
 
+.video-card.is-random-current {
+  border-color: rgba(250, 204, 21, 0.95);
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.45);
+}
+
+.random-pick-pill {
+  background: #facc15;
+  border-radius: 999px;
+  color: #0f172a;
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  margin-left: 8px;
+  padding: 2px 8px;
+}
+
 .video-card.is-random-pick {
   animation: random-pick-glow 1.8s ease-out;
 }

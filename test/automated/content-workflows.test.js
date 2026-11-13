@@ -539,3 +539,37 @@ test("the quick-save hotkey reports a duplicate instead of a bare error", async 
   await work.events.emit("keydown", keyboard("KeyS"));
   assert.equal(toastText(work), "Already saved near 01:00");
 });
+
+test("lineup hotkeys ask the worker to step, only for trusted keys, and say nothing on success", async () => {
+  const work = loadContent();
+  await flush();
+  const sent = () => work.messages.filter((message) => /LINEUP/.test(message.type)).map((message) => message.type);
+  await work.events.emit("keydown", keyboard("KeyK", { isTrusted: false }));
+  await work.events.emit("keydown", keyboard("KeyJ", { isTrusted: false }));
+  assert.deepEqual(sent(), []);
+  await work.events.emit("keydown", keyboard("KeyK"));
+  await work.events.emit("keydown", keyboard("KeyJ"));
+  assert.deepEqual(sent(), ["SCENEMARKS_LINEUP_NEXT", "SCENEMARKS_LINEUP_PREVIOUS"]);
+  assert.equal(toastText(work), "");
+
+  // A refusal from the worker shows as a toast on this page.
+  const real = work.context.chrome.runtime.sendMessage;
+  work.context.chrome.runtime.sendMessage = (message, callback) => (/LINEUP/.test(message.type)
+    ? Promise.resolve({ ok: false, error: "No lineup yet — use Open Random in the Library" })
+    : real(message, callback));
+  await work.events.emit("keydown", keyboard("KeyK"));
+  assert.equal(toastText(work), "No lineup yet — use Open Random in the Library");
+
+  const off = loadContent({ seed: { settings: { disabledSites: ["example.com"] } } });
+  await flush();
+  await off.events.emit("keydown", keyboard("KeyK"));
+  assert.equal(off.messages.some((message) => /LINEUP/.test(message.type)), false);
+});
+
+test("the Random hotkey asks the worker to open a video at its first mark", async () => {
+  const work = loadContent();
+  await flush();
+  await work.events.emit("keydown", keyboard("KeyR"));
+  assert.equal(work.messages.at(-1).type, "SCENEMARKS_OPEN_RANDOM_VIDEO");
+  assert.equal(toastText(work), "Opening a random video at its first mark");
+});

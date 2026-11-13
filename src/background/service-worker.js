@@ -354,7 +354,7 @@ function sampleRandom(items, count) {
   return pool.slice(0, limit);
 }
 
-// Shared picker behind the library page and overlay Random buttons: it
+// The picker behind the library page's Random button: it
 // restricts the pool to videoKeys when provided, drops videos already open
 // in this window's tabs, and avoids repeating excludeVideoKey (the previous
 // pick) whenever alternatives exist. It returns the pick without opening it.
@@ -387,39 +387,6 @@ async function pickRandomVideoCandidate(payload) {
     ok: true,
     video: picked,
     remainingCount: candidates.length - 1
-  };
-}
-
-async function openRandomVideo() {
-  const state = await SceneMarks.Storage.getState();
-  const videos = Object.values(state.videos);
-
-  if (!videos.length) {
-    return { ok: false, error: "SceneMarks library is empty." };
-  }
-
-  const openUrlKeys = await getOpenTabUrlKeys();
-  const candidates = videos.filter((video) => {
-    const openableUrl = video.canonicalUrl || (Array.isArray(video.rawUrls) ? video.rawUrls[0] : null);
-    return Boolean(openableUrl)
-      && Array.isArray(video.scenes)
-      && video.scenes.length > 0
-      && !isOpenInTab(video, openUrlKeys);
-  });
-
-  if (!candidates.length) {
-    return { ok: false, error: "Every saved video is already open in a tab in this window." };
-  }
-
-  const picked = pickRandom(candidates);
-  const url = picked.canonicalUrl || picked.rawUrls[0];
-  await chrome.tabs.create({ url });
-
-  return {
-    ok: true,
-    message: `Opening random video: ${picked.title || picked.canonicalUrl || "saved video"}`,
-    remainingCount: candidates.length - 1,
-    videoKey: picked.videoKey
   };
 }
 
@@ -464,6 +431,8 @@ async function openRandomVideos(payload) {
   // through. Each batch replaces the previous one.
   if (lineup.tabIds.length) {
     await saveVoiceLineup(lineup);
+    // Each opens at its first saved mark the first time it is shown.
+    await setUnstartedLineupTabs(lineup.tabIds);
   }
 
   return {
@@ -842,26 +811,67 @@ async function announceVoiceError(tab, heard, message) {
   return { ok: false, error: message };
 }
 
-async function switchVideoTab(direction, heard) {
-  const current = await getVoiceTargetTab();
-  const allTabs = await chrome.tabs.query({});
+// The lineup's tabs that are still open; closed ones are forgotten.
+async function getLiveLineup(allTabs) {
   const openIds = new Set(allTabs.map((tab) => tab.id));
   const lineup = await getVoiceLineup();
   const liveLineup = lineup.tabIds.filter((id) => openIds.has(id));
   if (liveLineup.length !== lineup.tabIds.length) {
     await saveVoiceLineup({ ...lineup, tabIds: liveLineup });
   }
-  const windowTabs = current
-    ? allTabs.filter((tab) => tab.windowId === current.windowId && isWebPageUrl(tab.url))
-      .sort((a, b) => a.index - b.index).map((tab) => tab.id)
-    : [];
+  return liveLineup;
+}
 
-  const target = pickVoiceSwitchTarget(direction, current ? current.id : null, liveLineup, windowTabs);
-  if (!target) {
-    return announceVoiceError(current, heard, liveLineup.length
-      ? "This is the only video in the lineup"
-      : "No other video tab to switch to");
+// Batch Open Random tabs not shown yet. The first time one becomes the
+// active tab it starts at its first saved mark, like a lineup step.
+const LINEUP_UNSTARTED_KEY = "lineupUnstarted";
+let unstartedWork = Promise.resolve();
+
+async function setUnstartedLineupTabs(tabIds) {
+  if (chrome.storage.session) {
+    await chrome.storage.session.set({ [LINEUP_UNSTARTED_KEY]: tabIds.slice() });
   }
+}
+
+// True once for a tab that has not been started yet. Serialized, so two
+// quick activations cannot both claim it.
+function takeUnstartedLineupTab(tabId) {
+  const taking = unstartedWork.then(async () => {
+    const session = chrome.storage.session;
+    if (!session) return false;
+    const stored = (await session.get(LINEUP_UNSTARTED_KEY))[LINEUP_UNSTARTED_KEY];
+    if (!Array.isArray(stored) || !stored.includes(tabId)) return false;
+    await session.set({ [LINEUP_UNSTARTED_KEY]: stored.filter((id) => id !== tabId) });
+    return true;
+  });
+  unstartedWork = taking.catch(() => false);
+  return taking;
+}
+
+async function startUnstartedLineupTab(tabId) {
+  if (!(await takeUnstartedLineupTab(tabId))) return null;
+  const lineup = await getVoiceLineup();
+  const index = lineup.tabIds.indexOf(tabId);
+  await waitForTabLoad(tabId);
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  return sendVoiceAction(tab, {
+    action: "startAtFirstMark",
+    ...(index >= 0 ? { position: index + 1, total: lineup.tabIds.length, kind: "lineup" } : {})
+  });
+}
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  if (activeInfo && Number.isSafeInteger(activeInfo.tabId)) {
+    startUnstartedLineupTab(activeInfo.tabId).catch(() => {});
+  }
+});
+
+// Pauses the video being left, brings the target tab to the front and
+// starts it at its first saved mark. Shared by voice skip / return and the
+// lineup hotkeys; `heard` is the voice word, or undefined for a hotkey.
+async function switchToTarget(current, target, allTabs, heard) {
+  // Started here, so its first activation must not start it again.
+  await takeUnstartedLineupTab(target.tabId);
 
   // Leave the current video paused, not playing in the background.
   if (current && isWebPageUrl(current.url)) {
@@ -880,16 +890,53 @@ async function switchVideoTab(direction, heard) {
   const tab = await chrome.tabs.get(target.tabId).catch(() => targetTab);
   return sendVoiceAction(tab, {
     action: "startAtFirstMark",
-    heard,
+    ...(heard ? { heard } : {}),
     position: target.position,
     total: target.total,
     kind: target.kind
   });
 }
 
-// "random": a random saved video that is not open yet, opened at its first
-// saved timestamp through the same owned queued jump the Library uses.
-async function openRandomVideoAtFirstMark() {
+async function switchVideoTab(direction, heard) {
+  const current = await getVoiceTargetTab();
+  const allTabs = await chrome.tabs.query({});
+  const liveLineup = await getLiveLineup(allTabs);
+  const windowTabs = current
+    ? allTabs.filter((tab) => tab.windowId === current.windowId && isWebPageUrl(tab.url))
+      .sort((a, b) => a.index - b.index).map((tab) => tab.id)
+    : [];
+
+  const target = pickVoiceSwitchTarget(direction, current ? current.id : null, liveLineup, windowTabs);
+  if (!target) {
+    return announceVoiceError(current, heard, liveLineup.length
+      ? "This is the only video in the lineup"
+      : "No other video tab to switch to");
+  }
+
+  return switchToTarget(current, target, allTabs, heard);
+}
+
+// Page hotkeys for the lineup: like voice skip / return, from the tab the
+// key was pressed in, but only through a lineup (no plain tab fallback).
+async function stepLineup(direction, senderTab) {
+  const allTabs = await chrome.tabs.query({});
+  const liveLineup = await getLiveLineup(allTabs);
+  if (!liveLineup.length) {
+    return { ok: false, error: "No lineup yet \u2014 use Open Random in the Library" };
+  }
+  const target = pickVoiceSwitchTarget(direction, senderTab.id, liveLineup, []);
+  if (!target) {
+    return { ok: false, error: "This is the only video in the lineup" };
+  }
+  const current = allTabs.find((tab) => tab.id === senderTab.id) || senderTab;
+  await switchToTarget(current, target, allTabs);
+  return { ok: true, switched: true };
+}
+
+// A random saved video that is not open yet, opened at its first saved
+// timestamp through the same owned queued jump the Library uses. Shared by
+// the Random hotkey and voice "random".
+async function openRandomAtFirstMark() {
   const state = await SceneMarks.Storage.getState();
   const openUrlKeys = await getOpenTabUrlKeys();
   const candidates = Object.values(state.videos).filter((video) => {
@@ -897,9 +944,13 @@ async function openRandomVideoAtFirstMark() {
     return Boolean(openableUrl) && video.scenes.length > 0 && !isOpenInTab(video, openUrlKeys);
   });
   if (!candidates.length) {
-    return announceVoiceError(await getVoiceTargetTab(), "random", Object.keys(state.videos).length
-      ? "Every saved video is already open"
-      : "The SceneMarks library is empty");
+    return {
+      ok: false,
+      nothingToOpen: true,
+      error: Object.keys(state.videos).length
+        ? "Every saved video is already open"
+        : "The SceneMarks library is empty"
+    };
   }
 
   const video = pickRandom(candidates);
@@ -919,6 +970,15 @@ async function openRandomVideoAtFirstMark() {
     await saveVoiceLineup({ ...lineup, tabIds: [...lineup.tabIds, result.tabId] });
   }
   return { ok: true, message: "Opening a random video at its first mark" };
+}
+
+// "random" by voice: failures are announced on the page.
+async function openRandomVideoAtFirstMark() {
+  const result = await openRandomAtFirstMark();
+  if (!result.ok && result.nothingToOpen) {
+    return announceVoiceError(await getVoiceTargetTab(), "random", result.error);
+  }
+  return result;
 }
 
 async function handleVoiceCommand(payload) {
@@ -1018,7 +1078,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEO) {
-    return respondWith(openRandomVideo(), sendResponse);
+    return respondWith(openRandomAtFirstMark().then(({ nothingToOpen: _ignored, ...result }) => result), sendResponse);
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.LINEUP_NEXT
+    || message.type === SceneMarks.Constants.MESSAGE_TYPES.LINEUP_PREVIOUS) {
+    // Only a page hotkey in the visible tab's content script may step the
+    // lineup; extension pages and background tabs may not switch tabs.
+    if (senderTabId(sender) === null || isExtensionPageSender(sender) || !sender.tab.active) {
+      sendResponse({ ok: false, error: "Only the active video tab may step the lineup." });
+      return false;
+    }
+    const direction = message.type === SceneMarks.Constants.MESSAGE_TYPES.LINEUP_NEXT ? 1 : -1;
+    return respondWith(stepLineup(direction, sender.tab), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEOS) {

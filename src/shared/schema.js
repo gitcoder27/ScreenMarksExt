@@ -97,7 +97,9 @@
       previousScene: sanitizeText(hotkeys.previousScene || defaults.previousScene, 60),
       randomVideo: sanitizeText(hotkeys.randomVideo || defaults.randomVideo, 60),
       toggleOverlay: sanitizeText(hotkeys.toggleOverlay || defaults.toggleOverlay, 60),
-      openLibrary: sanitizeText(hotkeys.openLibrary || defaults.openLibrary, 60)
+      openLibrary: sanitizeText(hotkeys.openLibrary || defaults.openLibrary, 60),
+      lineupNext: sanitizeText(hotkeys.lineupNext || defaults.lineupNext, 60),
+      lineupPrevious: sanitizeText(hotkeys.lineupPrevious || defaults.lineupPrevious, 60)
     };
   }
 
