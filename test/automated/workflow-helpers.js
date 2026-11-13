@@ -29,6 +29,26 @@ class FakeElement {
   append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } }
   remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((node) => node !== this); }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+  insertBefore(node, reference) {
+    node.remove();
+    node.parentNode = this;
+    const index = reference ? this.children.indexOf(reference) : -1;
+    if (index < 0) this.children.push(node); else this.children.splice(index, 0, node);
+    return node;
+  }
+  replaceWith(node) {
+    const parent = this.parentNode;
+    if (!parent) return;
+    node.remove();
+    parent.children[parent.children.indexOf(this)] = node;
+    node.parentNode = parent;
+    this.parentNode = null;
+  }
+  get nextSibling() {
+    const siblings = this.parentNode ? this.parentNode.children : [];
+    return siblings[siblings.indexOf(this) + 1] || null;
+  }
+  contains(node) { for (let current = node; current; current = current.parentNode) if (current === this) return true; return false; }
   get firstChild() { return this.children[0] || null; }
   setAttribute(key, value) { this.attributes[key] = value; }
   removeAttribute(key) { delete this.attributes[key]; }

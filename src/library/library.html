@@ -54,7 +54,9 @@
         <p id="summaryBox" class="summary-box"></p>
         <p id="statusLine" class="status-line" role="status" aria-live="polite"></p>
       </div>
-      <section id="libraryList" class="library-list"></section>
+      <section id="libraryList" class="library-list" aria-label="Saved videos"></section>
+      <p id="emptyState" class="empty-state" hidden></p>
+      <button id="showMoreButton" class="show-more-button" type="button" hidden></button>
 
       <footer class="library-footer">
         <button id="exportButton" type="button">Export JSON</button>

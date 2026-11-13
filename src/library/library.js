@@ -180,9 +180,17 @@
   // exceptions, so expanding in one does not leak into the other.
   const expandedVideoKeys = new Set();
   const collapsedMomentKeys = new Set();
-  // The filtered videos from the last render, so a collapsed card can build
-  // its scene rows when it is first expanded.
-  const renderedVideos = new Map();
+  // The list renders the first PAGE_SIZE cards; "Show more" adds another
+  // PAGE_SIZE. The actions (Play These, Random, Open Random) always use the
+  // whole filtered list, never just the cards rendered so far.
+  const PAGE_SIZE = 100;
+  let renderLimit = PAGE_SIZE;
+  // The cards in the list, in order, with the filtered video each shows (so
+  // a collapsed card can build its rows when it is first expanded).
+  const cards = new Map();
+  // Video keys changed by storage events, applied once per frame.
+  const pendingVideoKeys = new Set();
+  let flushScheduled = false;
 
   function byId(id) {
     return document.getElementById(id);
@@ -272,7 +280,7 @@
     sortId = normalizeSortId(elements.sortSelect.value);
     elements.sortSelect.value = sortId;
     saveSort(sortId);
-    render();
+    render({ reset: true });
   }
 
   let lastPlatformSignature = null;
@@ -305,29 +313,56 @@
     elements.platformFilter.value = platforms.includes(selected) ? selected : "all";
   }
 
-  function render() {
-    renderPlatformOptions();
-    const scrollY = window.scrollY;
-    const videos = getFilteredVideos();
-    const sceneCount = videos.reduce((total, video) => total + video.scenes.length, 0);
-    const favoriteVideoCount = videos.filter((video) => video.favorite).length;
-    const favoriteSceneCount = videos.reduce(
-      (total, video) => total + video.scenes.filter((scene) => scene.favorite).length,
-      0
-    );
+  function renderSummary(videos) {
+    let sceneCount = 0;
+    let favoriteVideoCount = 0;
+    let favoriteSceneCount = 0;
+    for (const video of videos) {
+      sceneCount += video.scenes.length;
+      favoriteVideoCount += video.favorite ? 1 : 0;
+      for (const scene of video.scenes) {
+        favoriteSceneCount += scene.favorite ? 1 : 0;
+      }
+    }
 
-    clearNode(elements.libraryList);
-    renderedVideos.clear();
-    videos.forEach((video) => renderedVideos.set(video.videoKey, video));
     elements.summaryBox.textContent = `${plural(videos.length, "video")}, ${plural(sceneCount, "scene")}`
       + (favoriteVideoCount ? `, ${plural(favoriteVideoCount, "favorite video")}` : "")
       + (favoriteSceneCount ? `, ${plural(favoriteSceneCount, "favorite moment")}` : "");
+  }
 
+  function renderFooter(videos) {
+    elements.emptyState.hidden = videos.length > 0;
     if (!videos.length) {
-      elements.libraryList.append(createElement("p", "empty-state", emptyMessage()));
-    } else {
-      videos.forEach((video) => elements.libraryList.append(renderVideo(video)));
+      elements.emptyState.textContent = emptyMessage();
     }
+
+    const remaining = videos.length - Math.min(renderLimit, videos.length);
+    elements.showMoreButton.hidden = remaining <= 0;
+    if (remaining > 0) {
+      elements.showMoreButton.textContent = `Show ${Math.min(PAGE_SIZE, remaining)} more (${remaining} not shown)`;
+    }
+  }
+
+  // Full rebuild: filters, search, sort, Expand / Collapse All and the
+  // first load. options.reset goes back to the first PAGE_SIZE cards.
+  function render(options) {
+    if (options && options.reset) {
+      renderLimit = PAGE_SIZE;
+    }
+    closeRowMenu(false);
+    renderPlatformOptions();
+    const scrollY = window.scrollY;
+    const videos = getFilteredVideos();
+
+    clearNode(elements.libraryList);
+    cards.clear();
+    for (const video of videos.slice(0, renderLimit)) {
+      const card = renderVideo(video);
+      cards.set(video.videoKey, { card, video });
+      elements.libraryList.append(card);
+    }
+    renderSummary(videos);
+    renderFooter(videos);
 
     // Rebuilding every card drops the browser's scroll anchor and can clamp
     // the scroll offset while the list is momentarily shorter. Restore the
@@ -335,6 +370,161 @@
     if (window.scrollY !== scrollY) {
       window.scrollTo(0, scrollY);
     }
+  }
+
+  // Partial update: rebuild only the cards of changedKeys, add and remove
+  // cards that entered or left the filtered list, and move cards only where
+  // the order changed. Untouched cards keep their DOM, so focus and scroll
+  // stay where they were; focus inside a rebuilt card moves to the same
+  // control in its replacement.
+  function updateList(changedKeys) {
+    const platformBefore = elements.platformFilter.value;
+    renderPlatformOptions();
+    if (elements.platformFilter.value !== platformBefore) {
+      render({ reset: true });
+      return;
+    }
+    if (rowMenuTarget && changedKeys.has(rowMenuTarget.videoKey)) {
+      closeRowMenu(false);
+    }
+
+    const focus = captureFocus();
+    const videos = getFilteredVideos();
+    const visible = videos.slice(0, renderLimit);
+    const visibleKeys = new Set(visible.map((video) => video.videoKey));
+    const list = elements.libraryList;
+
+    for (const [videoKey, entry] of cards) {
+      if (!visibleKeys.has(videoKey)) {
+        entry.card.remove();
+        cards.delete(videoKey);
+      }
+    }
+
+    let anchor = list.firstChild;
+    for (const video of visible) {
+      let entry = cards.get(video.videoKey);
+      if (!entry || changedKeys.has(video.videoKey)) {
+        const card = renderVideo(video);
+        if (entry) {
+          if (anchor === entry.card) {
+            anchor = card;
+          }
+          entry.card.replaceWith(card);
+        }
+        entry = { card, video };
+        cards.set(video.videoKey, entry);
+      } else {
+        entry.video = video;
+      }
+
+      if (entry.card === anchor) {
+        anchor = anchor.nextSibling;
+      } else {
+        list.insertBefore(entry.card, anchor);
+      }
+    }
+
+    renderSummary(videos);
+    renderFooter(videos);
+    restoreFocus(focus, visible);
+  }
+
+  function scheduleUpdate(videoKeys) {
+    videoKeys.forEach((videoKey) => pendingVideoKeys.add(videoKey));
+    if (flushScheduled) {
+      return;
+    }
+    flushScheduled = true;
+    const schedule = root.requestAnimationFrame || ((callback) => setTimeout(callback, 16));
+    schedule(() => {
+      flushScheduled = false;
+      const changed = new Set(pendingVideoKeys);
+      pendingVideoKeys.clear();
+      if (state && changed.size) {
+        updateList(changed);
+      }
+    });
+  }
+
+  function findDescendant(node, predicate) {
+    for (const child of node.children || []) {
+      if (predicate(child)) {
+        return child;
+      }
+      const found = findDescendant(child, predicate);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+
+  function sceneRows(card) {
+    const table = findDescendant(card, (node) => node.dataset && node.dataset.sceneTable === "true");
+    return table ? Array.from(table.children) : [];
+  }
+
+  function cardOf(node) {
+    let current = node;
+    while (current && current !== elements.libraryList) {
+      if (current.dataset && current.dataset.videoKey && cards.has(current.dataset.videoKey)) {
+        return current;
+      }
+      current = current.parentNode;
+    }
+    return null;
+  }
+
+  // Controls carry data-focus ("title", "video-star", "star:<sceneId>", ...)
+  // so a rebuilt card can hand focus to its replacement.
+  function captureFocus() {
+    const active = document.activeElement;
+    const card = active && active.dataset && active.dataset.focus ? cardOf(active) : null;
+    if (!card) {
+      return null;
+    }
+
+    const videoKey = card.dataset.videoKey;
+    const [kind, sceneId] = active.dataset.focus.split(/:(.*)/s);
+    const rows = sceneRows(card);
+    return {
+      element: active,
+      videoKey,
+      focusId: active.dataset.focus,
+      kind,
+      rowIndex: sceneId ? rows.findIndex((row) => row.dataset.sceneId === sceneId) : -1,
+      cardIndex: Array.from(cards.keys()).indexOf(videoKey)
+    };
+  }
+
+  function restoreFocus(saved, visible) {
+    if (!saved || (saved.element.isConnected && document.activeElement === saved.element)) {
+      return;
+    }
+
+    const entry = cards.get(saved.videoKey);
+    let target = entry && findDescendant(entry.card, (node) => node.dataset && node.dataset.focus === saved.focusId);
+    if (!target && entry && saved.rowIndex >= 0) {
+      // The row left the list (deleted, or unstarred under Favorite
+      // moments): take the same control on the row now in its place.
+      const rows = sceneRows(entry.card);
+      const row = rows[Math.min(saved.rowIndex, rows.length - 1)];
+      target = row && findDescendant(row, (node) => node.dataset && String(node.dataset.focus).startsWith(`${saved.kind}:`));
+    }
+    if (!target && visible.length) {
+      // The card left the list: take the title of the card now in its place.
+      const next = cards.get(visible[Math.min(Math.max(saved.cardIndex, 0), visible.length - 1)].videoKey);
+      target = next && findDescendant(next.card, (node) => node.dataset && node.dataset.focus === "title");
+    }
+    if (target) {
+      target.focus({ preventScroll: true });
+    }
+  }
+
+  function showMore() {
+    renderLimit += PAGE_SIZE;
+    updateList(new Set());
   }
 
   function emptyMessage() {
@@ -380,15 +570,22 @@
       return;
     }
 
+    const previousPick = lastRandomPickKey;
     lastRandomPickKey = response.video.videoKey;
     setVideoCollapsed(response.video.videoKey, false);
-    render();
+    // A pick beyond the cards shown so far extends the list to reach it.
+    const index = getFilteredVideos().findIndex((video) => video.videoKey === lastRandomPickKey);
+    if (index >= renderLimit) {
+      renderLimit = Math.ceil((index + 1) / PAGE_SIZE) * PAGE_SIZE;
+    }
+    updateList(new Set([previousPick, lastRandomPickKey].filter(Boolean)));
 
     requestAnimationFrame(() => {
-      const card = elements.libraryList.querySelector(`[data-video-key="${CSS.escape(response.video.videoKey)}"]`);
-      if (!card) {
+      const entry = cards.get(response.video.videoKey);
+      if (!entry) {
         return;
       }
+      const card = entry.card;
 
       card.scrollIntoView({ behavior: "smooth", block: "center" });
       card.classList.add("is-random-pick");
@@ -516,12 +713,12 @@
 
   function expandAllVideos() {
     getFilteredVideos().forEach((video) => setVideoCollapsed(video.videoKey, false));
-    render();
+    updateList(new Set(cards.keys()));
   }
 
   function collapseAllVideos() {
     getFilteredVideos().forEach((video) => setVideoCollapsed(video.videoKey, true));
-    render();
+    updateList(new Set(cards.keys()));
   }
 
   function renderVideo(video) {
@@ -543,6 +740,7 @@
     title.type = "button";
     title.className = "video-title-button";
     title.setAttribute("aria-expanded", String(!isCollapsed));
+    title.dataset.focus = "title";
     title.addEventListener("click", () => toggleVideoCollapse(video.videoKey));
 
     const caret = createElement("span", "video-title-caret", isCollapsed ? "+" : "-");
@@ -557,11 +755,13 @@
     const actions = createElement("div", "video-actions");
 
     title.append(caret, titleText, sceneCount);
-    actions.append(
-      createFavoriteButton(video.favorite, "video", () => toggleVideoFavorite(video.videoKey, !video.favorite)),
-      createButton("Open", () => openVideo(video)),
-      createButton("Delete Video", () => deleteVideo(fullVideo))
-    );
+    const star = createFavoriteButton(video.favorite, "video", () => toggleVideoFavorite(video.videoKey, !video.favorite));
+    const open = createButton("Open", () => openVideo(video));
+    const remove = createButton("Delete Video", () => deleteVideo(fullVideo));
+    star.dataset.focus = "video-star";
+    open.dataset.focus = "open";
+    remove.dataset.focus = "delete-video";
+    actions.append(star, open, remove);
 
     details.append(platform);
     if (isRandomPick) {
@@ -572,6 +772,7 @@
     card.append(header);
 
     const sceneTable = createElement("div", "scene-table");
+    sceneTable.dataset.sceneTable = "true";
     sceneTable.hidden = isCollapsed;
     // Rows are built on first expand: building every row of every collapsed
     // card made each re-render slow on large libraries.
@@ -609,17 +810,18 @@
 
     // Toggle the existing card in place: a full re-render here would drop the
     // scroll position (and the clicked button's focus) every time.
-    const card = elements.libraryList.querySelector(`[data-video-key="${CSS.escape(videoKey)}"]`);
-    if (!card) {
+    const entry = cards.get(videoKey);
+    if (!entry) {
       render();
       return;
     }
+    const card = entry.card;
 
     const isCollapsed = isVideoCollapsed(videoKey);
     card.classList.toggle("is-collapsed", isCollapsed);
 
     const sceneTable = card.querySelector(".scene-table");
-    const video = renderedVideos.get(videoKey);
+    const video = entry.video;
     if (!isCollapsed && sceneTable && !sceneTable.dataset.filled && video) {
       fillSceneTable(sceneTable, video);
     }
@@ -648,6 +850,7 @@
   // there is one, then star, Jump and a "more" menu (Edit, Delete).
   function renderScene(video, scene) {
     const row = createElement("div", scene.favorite ? "scene-row is-favorite" : "scene-row");
+    row.dataset.sceneId = scene.id;
     const time = createElement("span", "scene-time", formatRange(scene.startSeconds, scene.endSeconds));
     const saved = formatSavedDate(scene.createdAt);
     const savedText = createElement("span", "scene-saved", saved ? saved.short : "");
@@ -673,11 +876,11 @@
     more.setAttribute("aria-label", more.title);
     more.setAttribute("aria-haspopup", "menu");
     more.setAttribute("aria-expanded", "false");
-    actions.append(
-      createFavoriteButton(scene.favorite, `timestamp ${label}`, () => toggleFavorite(video.videoKey, scene)),
-      jump,
-      more
-    );
+    const star = createFavoriteButton(scene.favorite, `timestamp ${label}`, () => toggleFavorite(video.videoKey, scene));
+    star.dataset.focus = `star:${scene.id}`;
+    jump.dataset.focus = `jump:${scene.id}`;
+    more.dataset.focus = `more:${scene.id}`;
+    actions.append(star, jump, more);
 
     row.append(time, savedText, body, actions);
     return row;
@@ -1009,10 +1212,11 @@
   }
 
   function installStorageSync() {
-    // This is the only re-render path after a mutation. Storage is split
-    // per video, so a change carries just the videos it touched: they are
-    // patched in from newValue, with no re-read. Writes that leave videos
-    // untouched (pending jump, range draft, settings) skip the rebuild.
+    // This is the only update path after a mutation. Storage is split per
+    // video, so a change carries just the videos it touched: they are
+    // patched in from newValue, with no re-read, and only their cards are
+    // rebuilt, once per frame. Writes that leave videos untouched (pending
+    // jump, range draft, settings) change nothing here.
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== "local") {
         return;
@@ -1041,7 +1245,7 @@
           delete state.videos[SceneMarks.Storage.videoKeyFromStorageKey(key)];
         }
       });
-      render();
+      scheduleUpdate(videoChanges.map((key) => SceneMarks.Storage.videoKeyFromStorageKey(key)));
     });
   }
 
@@ -1065,6 +1269,8 @@
       "collapseAllButton",
       "summaryBox",
       "libraryList",
+      "emptyState",
+      "showMoreButton",
       "exportButton",
       "importInput",
       "confirmDialog",
@@ -1081,11 +1287,12 @@
     elements.openOptionsButton.addEventListener("click", () => chrome.runtime.openOptionsPage());
     elements.searchInput.addEventListener("input", () => {
       window.clearTimeout(searchRenderTimer);
-      searchRenderTimer = window.setTimeout(render, SEARCH_RENDER_DEBOUNCE_MS);
+      searchRenderTimer = window.setTimeout(() => render({ reset: true }), SEARCH_RENDER_DEBOUNCE_MS);
     });
-    elements.platformFilter.addEventListener("change", render);
+    elements.platformFilter.addEventListener("change", () => render({ reset: true }));
     elements.sortSelect.addEventListener("change", changeSort);
-    elements.favoritesFilter.addEventListener("change", render);
+    elements.favoritesFilter.addEventListener("change", () => render({ reset: true }));
+    elements.showMoreButton.addEventListener("click", showMore);
     elements.playQueueButton.addEventListener("click", playFilteredScenes);
     elements.randomVideoButton.addEventListener("click", pickRandomVideo);
     elements.openRandomVideosButton.addEventListener("click", openRandomVideos);

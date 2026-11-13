@@ -476,6 +476,18 @@ select {
   padding: 18px;
 }
 
+.empty-state[hidden],
+.show-more-button[hidden] {
+  display: none;
+}
+
+.show-more-button {
+  background: #334155;
+  color: #e2e8f0;
+  margin-top: 12px;
+  width: 100%;
+}
+
 .library-footer {
   display: flex;
   gap: 10px;
@@ -603,7 +615,19 @@ select {
   }
 
   .library-header,
-  .library-footer {
+  .empty-state[hidden],
+.show-more-button[hidden] {
+  display: none;
+}
+
+.show-more-button {
+  background: #334155;
+  color: #e2e8f0;
+  margin-top: 12px;
+  width: 100%;
+}
+
+.library-footer {
     align-items: stretch;
     flex-direction: column;
   }

@@ -119,7 +119,8 @@ test("wording: singular counts, platform names and an empty-library message", as
   assert.ok(texts.includes("YouTube"));
   assert.match(page.get("summaryBox").textContent, /^1 video, 1 scene$/);
   const empty = await openLibrary({});
-  assert.match(descendants(empty.get("libraryList")).map((node) => node.textContent).join(" "), /Your library is empty\. On a video page, press Alt\+Shift\+S/);
+  assert.equal(empty.get("emptyState").hidden, false);
+  assert.match(empty.get("emptyState").textContent, /^Your library is empty\. On a video page, press Alt\+Shift\+S/);
 });
 
 const FAVORITES = [
@@ -207,4 +208,126 @@ test("import messages are plain words, and a broken file names itself", async ()
   await input.emit("change");
   assert.equal(page.get("statusLine").textContent, "Imported 1 video. New timestamps were added; your existing ones and the library order are unchanged."
     + " 1 timestamp was already saved, so it was combined with the saved one (tags joined, stars kept).");
+});
+
+function many(count, scenesEach = 2) {
+  return Array.from({ length: count }, (_, index) => {
+    const day = String(1 + (index % 28)).padStart(2, "0");
+    const month = String(1 + Math.floor(index / 28) % 12).padStart(2, "0");
+    return video(`v${index}`, `Synthetic ${index}`, Array.from({ length: scenesEach }, (__, n) => scene(`v${index}s${n}`, 10 * (n + 1),
+      `2025-${month}-${day}T00:00:${String(n).padStart(2, "0")}.000Z`)));
+  });
+}
+
+function trackFocus(page) {
+  const { FakeElement } = require("./workflow-helpers");
+  FakeElement.prototype.focus = function focus() { page.document.activeElement = this; };
+  page.document.activeElement = null;
+}
+
+function cardList(page) {
+  return page.get("libraryList").children.slice();
+}
+
+test("a change to one video key rebuilds one card, from newValue, with no re-read", async () => {
+  const page = await openLibrary(seedOf(many(6)));
+  const before = cardList(page);
+  const keys = before.map((card) => card.dataset.videoKey);
+  const target = page.store.raw(`video:${keys[2]}`);
+  const reads = page.store.readLog.length;
+  // A direct storage write, as from another tab's save.
+  await new Promise((resolve) => page.store.local.set({ [`video:${keys[2]}`]: {
+    ...target, scenes: [...target.scenes.map((item) => ({ ...item, note: "edited" }))]
+  } }, resolve));
+  assert.equal(cardList(page)[2], before[2], "batched to the next frame");
+  await page.advance(16);
+  const after = cardList(page);
+  assert.equal(page.store.readLog.length, reads);
+  assert.deepEqual(after.map((card) => card.dataset.videoKey), keys);
+  after.forEach((card, index) => (index === 2 ? assert.notEqual(card, before[2]) : assert.equal(card, before[index])));
+
+  // Two writes in one frame: one pass, two cards.
+  await page.context.SceneMarks.Storage.updateVideo(keys[0], { favorite: true });
+  await page.context.SceneMarks.Storage.updateVideo(keys[5], { favorite: true });
+  await page.advance(16);
+  const third = cardList(page);
+  third.forEach((card, index) => ([0, 5].includes(index) ? assert.notEqual(card, after[index]) : assert.equal(card, after[index])));
+});
+
+test("starring five scenes in a row from the keyboard keeps focus on each star", async () => {
+  const page = await openLibrary(seedOf(many(3, 6)));
+  trackFocus(page);
+  await page.get("expandAllButton").emit("click");
+  const { Storage } = page.context.SceneMarks;
+  for (let n = 0; n < 5; n += 1) {
+    const card = cardList(page)[1];
+    const star = descendants(card).find((node) => node.dataset.focus === `star:v1s${n}`);
+    star.focus();
+    await star.emit("click");
+    await page.advance(16);
+    const focused = page.document.activeElement;
+    assert.equal(focused.dataset.focus, `star:v1s${n}`);
+    assert.equal(focused.textContent, "★");
+    assert.equal(cardList(page)[1].contains(focused), true);
+  }
+  assert.equal((await Storage.getScenesForVideo("generic:v1")).filter((item) => item.favorite).length, 5);
+  assert.deepEqual(cardList(page).map((card) => card.dataset.videoKey), ["generic:v2", "generic:v1", "generic:v0"]);
+});
+
+test("cards leave when they stop matching, new videos land in sorted place, focus moves on", async () => {
+  const page = await openLibrary(seedOf(FAVORITES));
+  trackFocus(page);
+  page.get("favoritesFilter").value = "moments";
+  await page.get("favoritesFilter").emit("change");
+  const { Storage } = page.context.SceneMarks;
+  // Unstar the first moment from the keyboard: the row leaves, focus takes the next row's star.
+  const star = descendants(cardList(page)[0]).find((node) => node.dataset.focus === "star:p2");
+  star.focus();
+  await star.emit("click");
+  await page.advance(16);
+  assert.equal(page.document.activeElement.dataset.focus, "star:p4");
+  // Unstar the last moment of that video: the card leaves, focus takes the next card's title.
+  await descendants(cardList(page)[0]).find((node) => node.dataset.focus === "star:p4").emit("click");
+  await page.advance(16);
+  assert.deepEqual(cardList(page).map((card) => card.dataset.videoKey), ["generic:both"]);
+  assert.equal(page.document.activeElement.dataset.focus, "title");
+
+  page.get("favoritesFilter").value = "all";
+  await page.get("favoritesFilter").emit("change");
+  await Storage.saveScene({ videoKey: "generic:new", platform: "generic", title: "Brand new", canonicalUrl: "https://example.com/new" }, { startSeconds: 3 });
+  await Storage.deleteVideo("generic:none");
+  // The storage double reports set() only; a removal arrives as no newValue.
+  page.changed.forEach((listener) => listener({ "video:generic:none": { oldValue: {} } }, "local"));
+  await page.advance(16);
+  assert.deepEqual(cardList(page).map((card) => card.dataset.videoKey), ["generic:new", "generic:plain", "generic:starred", "generic:both"]);
+  assert.match(page.get("summaryBox").textContent, /^4 videos, 9 scenes/);
+});
+
+test("the list renders 100 cards with Show more, and the actions use the whole filtered list", async () => {
+  const page = await openLibrary(seedOf(many(250, 1)));
+  const more = page.get("showMoreButton");
+  assert.equal(cardList(page).length, 100);
+  assert.equal(more.hidden, false);
+  assert.equal(more.textContent, "Show 100 more (150 not shown)");
+  const first = cardList(page);
+  await more.emit("click");
+  assert.equal(cardList(page).length, 200);
+  assert.deepEqual(cardList(page).slice(0, 100), first);
+  await more.emit("click");
+  assert.equal(cardList(page).length, 250);
+  assert.equal(more.hidden, true);
+
+  // Back to 100 on a new filter; Play These still gets every filtered scene, in the order shown.
+  page.get("sortSelect").value = "title";
+  await page.get("sortSelect").emit("change");
+  assert.equal(cardList(page).length, 100);
+  await page.get("playQueueButton").emit("click");
+  const queued = page.messages.find((message) => message.type === "SCENEMARKS_PLAY_QUEUE_START");
+  const titleOrder = page.context.SceneMarks.LibraryView.sortVideos(many(250, 1), "title").map((item) => item.videoKey).slice(0, 200);
+  assert.deepEqual(Array.from(queued.payload.items, (item) => item.videoKey), titleOrder);
+  assert.deepEqual(Array.from(queued.payload.items.slice(0, 100), (item) => item.videoKey), cardList(page).map((card) => card.dataset.videoKey));
+  page.get("randomOpenCount").value = "5";
+  await page.get("openRandomVideosButton").emit("click").catch(() => {}); // The fake worker sends no video list back.
+  const random = page.messages.find((message) => message.type === "SCENEMARKS_OPEN_RANDOM_VIDEOS");
+  assert.equal(random.payload.videoKeys.length, 250);
 });
