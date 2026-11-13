@@ -826,3 +826,115 @@ test("the open-range line and button label follow a draft on this video only", a
   assert.equal(rangeLine(fresh).hidden, true);
   assert.doesNotMatch(pageText(fresh), /05:00/);
 });
+
+test("fullscreen forces a pill that shows only on trusted pointer movement and restores the panel without writing", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  const { host, next, collapse } = overlayParts(work);
+  const toast = work.document.body.children.find((node) => /scenemarks-toast/.test(node.className));
+  assert.equal(host.attributes.popover, "manual");
+  const calls = [];
+  host.showPopover = () => calls.push("panel:show");
+  host.hidePopover = () => calls.push("panel:hide");
+  toast.showPopover = () => calls.push("toast:show");
+  toast.hidePopover = () => calls.push("toast:hide");
+  toast.matches = (selector) => selector === ":popover-open";
+  const writes = work.store.writes;
+  const document = work.document;
+  const fullscreenChange = async (element) => {
+    document.fullscreenElement = element;
+    await document.emit("fullscreenchange", { isTrusted: true });
+  };
+  const move = (extra = {}) => document.emit("pointermove", { isTrusted: true, ...extra });
+
+  // Entering: the pill, drawn as nothing until the pointer moves; panel then
+  // the open toast are raised above the fullscreen element. The panel moves
+  // into the player container, the only part of the page left clickable.
+  const player = new FakeElement("div");
+  await fullscreenChange(player);
+  assert.equal(host.className, "scenemarks-overlay is-collapsed is-fullscreen is-idle is-instant");
+  assert.deepEqual(calls, ["panel:hide", "panel:show", "toast:hide", "toast:show"]);
+  assert.equal(host.parentNode, player);
+  assert.deepEqual(markTexts(work), [], "the pill holds no list");
+  assert.equal(overlayParts(work).count.textContent, "1/2");
+
+  await move({ isTrusted: false });
+  assert.match(host.className, /is-idle/, "a synthetic move shows nothing");
+  await move();
+  assert.equal(host.className, "scenemarks-overlay is-collapsed is-fullscreen");
+  await work.advance(2900);
+  await move();
+  await work.advance(2900);
+  assert.doesNotMatch(host.className, /is-idle/, "movement keeps it shown");
+  await work.advance(100);
+  assert.equal(host.className, "scenemarks-overlay is-collapsed is-fullscreen is-idle", "3 s still: faded out");
+
+  // The pill steps between saved times; expanding is not offered.
+  await move();
+  await next.emit("click", { isTrusted: true, detail: 1 });
+  assert.equal(work.seeks.at(-1).seconds, 130);
+  await collapse.emit("click", { isTrusted: true, detail: 1 });
+  assert.match(host.className, /is-fullscreen/);
+
+  // Leaving restores the expanded panel in its old place; nothing was
+  // written, and the toast is left alone.
+  calls.length = 0;
+  await fullscreenChange(null);
+  assert.equal(host.className, "scenemarks-overlay");
+  assert.equal(host.parentNode, document.body);
+  assert.deepEqual(markTexts(work), ["00:10 -> 00:25", "02:10"]);
+  assert.deepEqual(calls, ["panel:hide", "panel:show"]);
+  await move();
+  await work.advance(5000);
+  assert.equal(host.className, "scenemarks-overlay", "no fade outside fullscreen");
+  assert.equal(work.store.writes, writes);
+});
+
+test("leaving fullscreen restores a stored pill, and a hidden overlay shows nothing in fullscreen", async () => {
+  const seed = savedLibrary();
+  seed.settings = { overlay: { collapsed: true } };
+  const work = loadContent({ seed });
+  await flush();
+  const { host } = overlayParts(work);
+  assert.equal(host.className, "scenemarks-overlay is-collapsed");
+  work.document.fullscreenElement = new FakeElement("div");
+  await work.document.emit("fullscreenchange", { isTrusted: true });
+  work.document.fullscreenElement = null;
+  await work.document.emit("fullscreenchange", { isTrusted: true });
+  assert.equal(host.className, "scenemarks-overlay is-collapsed");
+
+  await work.context.SceneMarks.Storage.updateSettings({ enableFloatingButton: false });
+  await flush();
+  const writes = work.store.writes;
+  work.document.fullscreenElement = new FakeElement("div");
+  await work.document.emit("fullscreenchange", { isTrusted: true });
+  await work.document.emit("pointermove", { isTrusted: true });
+  assert.equal(host.hidden, true);
+  assert.deepEqual(markTexts(work), []);
+  assert.equal(work.store.writes, writes);
+});
+
+test("native <video> fullscreen draws no pill, since nothing outside the video can be clicked there", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  const { host } = overlayParts(work);
+  const calls = [];
+  host.showPopover = () => calls.push("panel:show");
+  host.hidePopover = () => calls.push("panel:hide");
+  work.document.fullscreenElement = new FakeElement("video");
+  await work.document.emit("fullscreenchange", { isTrusted: true });
+  assert.equal(host.parentNode, work.document.body);
+  assert.match(host.className, /is-idle/);
+  await work.document.emit("pointermove", { isTrusted: true });
+  assert.match(host.className, /is-idle/, "movement does not show it");
+  assert.deepEqual(markTexts(work), []);
+  // Turned off and on again in that fullscreen: still nothing drawn.
+  await work.context.SceneMarks.Storage.updateSettings({ enableFloatingButton: false });
+  await work.context.SceneMarks.Storage.updateSettings({ enableFloatingButton: true });
+  await flush();
+  assert.match(host.className, /is-idle/);
+  work.document.fullscreenElement = null;
+  await work.document.emit("fullscreenchange", { isTrusted: true });
+  assert.equal(host.className, "scenemarks-overlay");
+  assert.deepEqual(markTexts(work), ["00:10 -> 00:25", "02:10"]);
+});

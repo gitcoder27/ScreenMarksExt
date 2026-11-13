@@ -3,6 +3,15 @@
    stay clear. A dragged position is applied inline from settings. */
 .scenemarks-overlay {
   all: initial;
+  /* The host is a popover="manual" (top layer, above fullscreen players):
+     all: initial already drops the popover defaults, and these say so
+     explicitly so the fixed position below holds. */
+  background: transparent;
+  border: 0;
+  inset: auto;
+  margin: 0;
+  overflow: visible;
+  padding: 0;
   box-sizing: border-box;
   color: #e2e8f0;
   color-scheme: dark;
@@ -16,6 +25,32 @@
 
 .scenemarks-overlay.is-collapsed {
   width: auto;
+}
+
+/* Fullscreen: always the pill, with previous / next and no expand button;
+   shown only while the pointer moves. */
+.scenemarks-overlay.is-fullscreen {
+  transition: opacity 160ms ease;
+}
+
+.scenemarks-overlay.is-fullscreen .scenemarks-overlay__collapse {
+  display: none;
+}
+
+.scenemarks-overlay.is-idle {
+  opacity: 0;
+  transition: opacity 400ms ease;
+}
+
+.scenemarks-overlay.is-idle.is-instant {
+  transition: none;
+}
+
+/* Children reset with all: initial would take pointer events back, so a
+   hidden pill turns them off on every descendant. */
+.scenemarks-overlay.is-idle,
+.scenemarks-overlay.is-idle * {
+  pointer-events: none !important;
 }
 
 .scenemarks-overlay,

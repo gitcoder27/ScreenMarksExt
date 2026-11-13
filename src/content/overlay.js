@@ -59,6 +59,16 @@
     // position ({ x, y } fractions of the free space, or null for the
     // default top right spot).
     let collapsed = false;
+    // Fullscreen forces the pill and hides it while the pointer is still
+    // (idle). None of this is ever written to settings.
+    let fullscreen = false;
+    let idle = false;
+    let idleTimer = null;
+    let instantIdle = false;
+    // False in a fullscreen the panel cannot be placed in (see
+    // canHoldPanel): the pill then stays hidden.
+    let pillAllowed = false;
+    const IDLE_MS = 3000;
     let position = null;
     // Pill toggles still on their way to storage; until they land, a
     // settings echo of an older toggle must not flip the pill back.
@@ -77,6 +87,7 @@
     let rangeStart = null;
     let rangeButton = null;
     const EDGE = 8;
+    const mount = document.body || document.documentElement;
     const toast = document.createElement("div");
     toast.className = "scenemarks-toast";
     toast.setAttribute("popover", "manual");
@@ -201,7 +212,7 @@
     }
 
     function renderRange() {
-      const open = enabled && !collapsed && rangeStart !== null;
+      const open = enabled && !isPill() && rangeStart !== null;
       rangeLine.hidden = !open;
       rangeLine.textContent = open ? `Range open from ${formatSeconds(rangeStart)}` : "";
       if (rangeButton) rangeButton.textContent = rangeStart !== null ? "Mark range end" : "Mark range start";
@@ -228,7 +239,7 @@
       updateStepButtons();
       renderRange();
       marks.hidden = !Array.isArray(scenes);
-      if (marks.hidden || collapsed) {
+      if (marks.hidden || isPill()) {
         // Hidden or collapsed: no time is left in the page's DOM.
         marksStatus.textContent = "";
         markButtons = [];
@@ -289,14 +300,39 @@
         starts = [];
         rangeStart = null;
         drag = null;
+        root.clearTimeout(idleTimer);
+        idle = false;
+        hidePopover(host);
+      } else {
+        // Shown last, so it sits above the page and any fullscreen element.
+        showPopover(host);
+        if (fullscreen && pillAllowed) wake();
+        else if (fullscreen) goIdle(true);
       }
       renderMarks();
+      applyClasses();
       if (enabled) applyPosition();
       return enabled;
     }
 
+    function isPill() {
+      return collapsed || fullscreen;
+    }
+
+    // The idle pill is transparent and takes no pointer events, so a
+    // control nobody can see cannot be pressed. Entering fullscreen hides
+    // it at once (is-instant), with no fade drawn over the video.
+    function applyClasses() {
+      let className = "scenemarks-overlay";
+      if (isPill()) className += " is-collapsed";
+      if (fullscreen) className += " is-fullscreen";
+      if (fullscreen && idle) className += " is-idle";
+      if (fullscreen && idle && instantIdle) className += " is-instant";
+      host.className = className;
+    }
+
     function applyCollapsed() {
-      host.className = collapsed ? "scenemarks-overlay is-collapsed" : "scenemarks-overlay";
+      applyClasses();
       collapseButton.textContent = collapsed ? "+" : "\u2013";
       collapseButton.className = "scenemarks-overlay__icon-button scenemarks-overlay__collapse";
       collapseButton.setAttribute("aria-label", collapsed ? "Expand SceneMarks" : "Collapse SceneMarks");
@@ -304,6 +340,114 @@
       collapseButton.title = collapsed ? "Expand" : "Collapse to a pill";
       renderMarks();
       applyPosition();
+    }
+
+    // The top layer is the only surface drawn above a fullscreen player.
+    function showPopover(element) {
+      try { element.showPopover(); } catch (_error) { /* Already open, or older Chromium. */ }
+    }
+
+    function hidePopover(element) {
+      try { element.hidePopover(); } catch (_error) { /* Not open. */ }
+    }
+
+    function isPopoverOpen(element) {
+      try { return element.matches(":popover-open"); } catch (_error) { return false; }
+    }
+
+    // A newly fullscreen element enters the top layer above anything
+    // already there; hiding and showing again in the same task moves the
+    // panel, then an open toast, back above it without a frame in between.
+    // Only done when the fullscreen element changes, never per toast, so
+    // the player's top layer is not churned (F5).
+    //
+    // Chromium makes everything outside the fullscreen element inert: a
+    // pill left under <body> is drawn but cannot be clicked. So while a
+    // container (a player <div>) is fullscreen, the panel moves inside it,
+    // staying a top-layer popover; on leaving it moves back.
+    function raiseAboveFullscreen(container) {
+      hidePopover(host);
+      if (container && host.parentNode !== container) container.append(host);
+      if (enabled) showPopover(host);
+      if (isPopoverOpen(toast)) {
+        hidePopover(toast);
+        showPopover(toast);
+      }
+    }
+
+    function remount() {
+      hidePopover(host);
+      if (host.parentNode !== mount) mount.append(host);
+      if (enabled) showPopover(host);
+    }
+
+    // A <video> (native fullscreen) or other replaced element cannot hold
+    // the panel, and anything outside it is inert, so nothing is shown
+    // there; toasts and hotkeys still work.
+    const REPLACED_ELEMENTS = new Set(["VIDEO", "AUDIO", "IFRAME", "CANVAS", "IMG", "OBJECT", "EMBED"]);
+    function canHoldPanel(element) {
+      return Boolean(element && typeof element.append === "function"
+        && !REPLACED_ELEMENTS.has(String(element.tagName || "").toUpperCase()));
+    }
+
+    function goIdle(instant) {
+      root.clearTimeout(idleTimer);
+      idleTimer = null;
+      if (!fullscreen) return;
+      idle = true;
+      instantIdle = Boolean(instant);
+      drag = null;
+      applyClasses();
+    }
+
+    // Pointer movement shows the pill; 3 s without movement hides it.
+    function wake() {
+      if (!fullscreen || !enabled || !pillAllowed) return;
+      root.clearTimeout(idleTimer);
+      idleTimer = root.setTimeout(() => goIdle(false), IDLE_MS);
+      if (idle) {
+        idle = false;
+        instantIdle = false;
+        applyClasses();
+      }
+    }
+
+    function handlePointerActivity(event) {
+      if (!event.isTrusted) return;
+      wake();
+    }
+
+    let fullscreenElement = null;
+    function handleFullscreenChange() {
+      const element = document.fullscreenElement || null;
+      const wasFullscreen = fullscreen;
+      fullscreen = Boolean(element);
+      pillAllowed = canHoldPanel(element);
+      if (fullscreen && !wasFullscreen) {
+        document.addEventListener("pointermove", handlePointerActivity, true);
+        document.addEventListener("pointerdown", handlePointerActivity, true);
+      } else if (!fullscreen && wasFullscreen) {
+        document.removeEventListener("pointermove", handlePointerActivity, true);
+        document.removeEventListener("pointerdown", handlePointerActivity, true);
+      }
+      if (fullscreen) {
+        // Nothing is drawn until the pointer moves.
+        goIdle(true);
+      } else {
+        root.clearTimeout(idleTimer);
+        idleTimer = null;
+        idle = false;
+        instantIdle = false;
+      }
+      // Leaving restores the panel as it was: the stored pill state, which
+      // fullscreen never changed.
+      applyCollapsed();
+      if (element && element !== fullscreenElement) {
+        raiseAboveFullscreen(pillAllowed ? element : null);
+      } else if (!element && fullscreenElement) {
+        remount();
+      }
+      fullscreenElement = element;
     }
 
     // Stored fractions: x of the free width beside the panel, so a panel
@@ -367,7 +511,7 @@
     addStepHandler(nextButton, actions.nextMark);
 
     collapseButton.addEventListener("click", (event) => {
-      if (!event.isTrusted || !enabled) return;
+      if (!event.isTrusted || !enabled || fullscreen) return;
       collapsed = !collapsed;
       applyCollapsed();
       if (event.detail > 0) collapseButton.blur();
@@ -422,10 +566,21 @@
     root.addEventListener("resize", handleResize);
     const sizeObserver = typeof root.ResizeObserver === "function" ? new root.ResizeObserver(handleResize) : null;
     if (sizeObserver) sizeObserver.observe(host);
-    const mount = document.body || document.documentElement;
+    // Presses on the panel are the panel's own: inside a fullscreen player
+    // container a click must not also reach the player (which may pause or
+    // leave fullscreen on it). The panel's controls run first.
+    for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "contextmenu"]) {
+      host.addEventListener(type, (event) => event.stopPropagation());
+    }
+
+    // popover="manual": shown while enabled, never light-dismissed. The
+    // stylesheet overrides the popover's own inset, margin and border.
+    host.setAttribute("popover", "manual");
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
     mount.append(host, toast);
     host.hidden = true;
     applyCollapsed();
+    if (document.fullscreenElement) handleFullscreenChange();
     return {
       setEnabled,
       setLayout,
@@ -435,6 +590,10 @@
       showToast,
       destroy() {
         root.clearTimeout(toastTimer);
+        root.clearTimeout(idleTimer);
+        document.removeEventListener("fullscreenchange", handleFullscreenChange);
+        document.removeEventListener("pointermove", handlePointerActivity, true);
+        document.removeEventListener("pointerdown", handlePointerActivity, true);
         root.removeEventListener("resize", handleResize);
         if (sizeObserver) sizeObserver.disconnect();
         host.remove();
