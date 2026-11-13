@@ -315,3 +315,26 @@ test("normalizeHotkeys fills saveFavorite from its default", () => {
   assert.equal(Schema.normalizeSettings({ hotkeys: { quickSave: "Q" } }).hotkeys.saveFavorite, "Alt+Shift+F");
   assert.equal(Schema.normalizeSettings({ hotkeys: { saveFavorite: "F" } }).hotkeys.saveFavorite, "F");
 });
+
+test("normalizeSettings fills backup defaults and accepts only the offered intervals", () => {
+  const { Schema } = SceneMarks;
+  assert.deepEqual(Schema.normalizeSettings({}).backup, { enabled: false, intervalHours: 24 });
+  assert.deepEqual(Schema.normalizeSettings({ backup: { enabled: true, intervalHours: 72 } }).backup, { enabled: true, intervalHours: 72 });
+  assert.deepEqual(Schema.normalizeSettings({ backup: { enabled: "yes", intervalHours: 5 } }).backup, { enabled: false, intervalHours: 24 });
+});
+
+test("normalizeBackupStatus keeps a small fixed shape", () => {
+  const { Schema } = SceneMarks;
+  assert.deepEqual(Schema.normalizeBackupStatus(undefined), {
+    lastBackupAt: null, slot: 0, fingerprint: "", videoCount: 0, sceneCount: 0, bytes: 0, error: "", errorAt: null
+  });
+  const status = Schema.normalizeBackupStatus({
+    lastBackupAt: "2026-11-01T10:00:00.000Z", slot: 2, fingerprint: "x".repeat(500), videoCount: 3,
+    sceneCount: 9, bytes: 1200, error: "e".repeat(900), errorAt: "2026-11-02T10:00:00.000Z", extra: "dropped"
+  });
+  assert.equal(status.slot, 2);
+  assert.equal(status.fingerprint.length, 200);
+  assert.equal(status.error.length, 300);
+  assert.equal(status.extra, undefined);
+  assert.equal(Schema.normalizeBackupStatus({ slot: 3, lastBackupAt: "2026-11-01T10:00:00.000Z" }).slot, 0);
+});

@@ -692,6 +692,10 @@
           ...draftState.settings.voice,
           ...(updates && updates.voice ? updates.voice : {})
         },
+        backup: {
+          ...draftState.settings.backup,
+          ...(updates && updates.backup ? updates.backup : {})
+        },
         hotkeys: {
           ...draftState.settings.hotkeys,
           ...(updates && updates.hotkeys ? updates.hotkeys : {})
@@ -989,6 +993,14 @@
     return { ok: true };
   }
 
+  // The automatic backup's status lives in its own small key outside the
+  // state model (like voiceProfile): state reads, export and imports never
+  // touch it. Only the worker writes it, through updateRawKeys.
+  async function getBackupStatus() {
+    const raw = await chromeGet([STORAGE_KEYS.BACKUP_STATUS]);
+    return SceneMarks.Schema.normalizeBackupStatus(raw[STORAGE_KEYS.BACKUP_STATUS]);
+  }
+
   // Every key in this extension's storage.local is SceneMarks data.
   async function clearAllData() {
     return enqueueWrite(async () => {
@@ -1050,6 +1062,7 @@
   // updateState, updateRawKeys, or upsertVideo here.
   function createClient() {
     const client = {
+      getBackupStatus,
       getState,
       getScenesForVideo,
       getSettings,
@@ -1075,6 +1088,7 @@
     deleteScene,
     deleteVideo,
     endRange,
+    getBackupStatus,
     getScenesForVideo,
     getSettings,
     getState,

@@ -17,7 +17,11 @@
     // The user's recorded voice-command templates. Fixed size (a few
     // samples per command), written only while training; device-specific,
     // so it is left out of export and kept by a replacing import.
-    VOICE_PROFILE: "voiceProfile"
+    VOICE_PROFILE: "voiceProfile",
+    // The automatic backup's last result: when, which of the two files,
+    // the library fingerprint it saved and any error. One small fixed-size
+    // key, written only by the worker after a backup attempt.
+    BACKUP_STATUS: "backupStatus"
   });
   const RANGE_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
   const PENDING_JUMP_TTL_MS = 15 * 60 * 1000;
@@ -34,6 +38,14 @@
   // Sites switched off live in settings, which every tab reads, so the
   // list is capped.
   const MAX_DISABLED_SITES = 200;
+  // Automatic backup: exactly two fixed files in the downloads folder,
+  // written alternately, so the folder never holds more than two. Never put
+  // a date or any other varying part in these names.
+  const BACKUP_FILENAMES = Object.freeze([
+    "SceneMarks/scenemarks-backup-1.json",
+    "SceneMarks/scenemarks-backup-2.json"
+  ]);
+  const BACKUP_INTERVAL_CHOICES = Object.freeze([6, 12, 24, 72, 168]);
 
   const DEFAULT_SETTINGS = Object.freeze({
     // false pauses SceneMarks on every site; disabledSites lists the
@@ -62,6 +74,12 @@
       resumeOnStartup: false,
       autoOffMinutes: 0,
       onlyWithVideo: false
+    }),
+    // Automatic local backup (off by default). intervalHours is one of
+    // BACKUP_INTERVAL_CHOICES; the worker checks once an hour.
+    backup: Object.freeze({
+      enabled: false,
+      intervalHours: 24
     }),
     hotkeys: Object.freeze({
       quickSave: "Alt+Shift+S",
@@ -120,7 +138,9 @@
     VOICE_VIDEO_PRESENCE: "SCENEMARKS_VOICE_VIDEO_PRESENCE",
     // Offscreen engine -> worker, once a minute with auto-off on: has a
     // video played lately?
-    VOICE_IDLE_CHECK: "SCENEMARKS_VOICE_IDLE_CHECK"
+    VOICE_IDLE_CHECK: "SCENEMARKS_VOICE_IDLE_CHECK",
+    // Options page -> worker: back up the library now. Extension pages only.
+    BACKUP_NOW: "SCENEMARKS_BACKUP_NOW"
   });
 
   // The spoken commands, in training-screen order. The user records their
@@ -161,6 +181,8 @@
 
   SceneMarks.Constants = {
     ARMED_DELETE_TIMEOUT_MS,
+    BACKUP_FILENAMES,
+    BACKUP_INTERVAL_CHOICES,
     DEFAULT_SETTINGS,
     LEGACY_STORAGE_KEY,
     MAX_DISABLED_SITES,

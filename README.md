@@ -2,7 +2,7 @@
 
 SceneMarks is a local-first Chromium extension for saving timestamp bookmarks and scene ranges from HTML5 streaming video pages.
 
-It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#data-storage)). It does not download or record video, capture screenshots, inspect cookies, bypass DRM, send analytics, or use a backend server. Optional [voice commands](#voice-commands) listen to the microphone while you have them switched on; the sound is matched on this computer and never stored or sent anywhere.
+It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#data-storage)). If you switch on [automatic backup](#automatic-backup), it also writes a copy of the library to two files in the browser's downloads folder. It does not download or record video, capture screenshots, inspect cookies, bypass DRM, send analytics, or use a backend server. Optional [voice commands](#voice-commands) listen to the microphone while you have them switched on; the sound is matched on this computer and never stored or sent anywhere.
 
 ## What Is Implemented
 
@@ -20,8 +20,9 @@ It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#da
 - Favorites at both levels: star entire videos or individual timestamps in the Library and popup, or press `Alt+Shift+F` to save the current moment as a favorite. The Library favorites filter includes any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video at its first saved timestamp, skipping videos already open in tabs of the current window.
 - A lineup of the videos the Library's batch **Open Random** opened: each starts at its first saved timestamp the first time you look at it, and `Alt+Shift+K` / `Alt+Shift+J` step to the next or previous one.
+- [Automatic local backup](#automatic-backup) to two fixed files in the downloads folder, alternating, written only when the library changed.
 - Hands-free [voice commands](#voice-commands) (next, back, pause, play, mark, skip, return, random), recognized locally against your own recorded words, with no AI model and no network.
-- Permissions: `storage`, `unlimitedStorage`, `activeTab`, `scripting`, `tabs`, and `offscreen`, plus an `<all_urls>` host permission so content scripts (video detection, overlay, queued jumps) run on every page without popup activation. `unlimitedStorage` lifts the 10 MB `chrome.storage.local` cap; Chrome shows no permission warning for it. `offscreen` lets the voice listener run in a hidden extension page, so the microphone permission belongs to SceneMarks rather than to the video sites.
+- Permissions: `storage`, `unlimitedStorage`, `activeTab`, `scripting`, `tabs`, `offscreen`, `downloads` and `alarms`, plus an `<all_urls>` host permission so content scripts (video detection, overlay, queued jumps) run on every page without popup activation. `unlimitedStorage` lifts the 10 MB `chrome.storage.local` cap; Chrome shows no permission warning for it. `offscreen` lets the voice listener run in a hidden extension page, so the microphone permission belongs to SceneMarks rather than to the video sites. `downloads` and `alarms` are for [automatic backup](#automatic-backup): an hourly check, and saving the backup file.
 
 ## Install In Brave
 
@@ -171,6 +172,17 @@ Adapters only normalize video identity and titles. They do not access media stre
 
 Streaming services change player and URL behavior often. SceneMarks uses best-effort DOM/video interaction and may need adapter updates later.
 
+## Automatic Backup
+
+Settings → **Data** → **Back up the library to the downloads folder** (off by default). Once an hour SceneMarks checks whether a backup is due (every 6 hours to 7 days, 24 hours by default). When it is due and the library changed since the last backup, it saves the library to one of exactly two files, alternating:
+
+- `SceneMarks/scenemarks-backup-1.json`
+- `SceneMarks/scenemarks-backup-2.json`
+
+inside the browser's downloads folder. Each backup overwrites the older of the two files; no date or number is ever added to the name, so the folder never holds more than two backups. Nothing is written while the library is unchanged, so the other file is always a real earlier copy. An empty library is never backed up, so emptying it cannot overwrite a good copy. **Back Up Now** makes a backup at once (still skipping an unchanged or empty library), and the section shows when the last backup was made, to which file, and any error. If the browser ever refused to overwrite and saved under another name, SceneMarks deletes that extra file and reports the error instead.
+
+A backup is the same JSON as the Library's **Export JSON** (also available next to **Back Up Now**), so **Import JSON** in the Library restores it. It holds your video titles, page addresses, times, notes, tags and settings as plain text; it goes nowhere but your downloads folder. SceneMarks removes each backup from the browser's download list after it finishes (the file stays). The browser may show its download indicator briefly, and if it is set to ask where to save every file, it may ask each time.
+
 ## Data Storage
 
 Everything stays in this browser profile's `chrome.storage.local`, split so that a change rewrites only what it touches:
@@ -181,6 +193,7 @@ Everything stays in this browser profile's `chrome.storage.local`, split so that
 | `settings` | Settings, page hotkeys, the pause switch and the switched-off sites (at most 200) |
 | `activeRangeDraft` | A started, unfinished range (dropped after 24 hours) |
 | `pendingJump` | A jump owned by its destination tab and request token (dropped after 15 minutes) |
+| `backupStatus` | The last automatic backup: when, which of the two files, a fingerprint of the library it saved, and the last error. Written only after a backup attempt |
 | `voiceProfile` | Your recorded voice-command words: three sets of numeric features (MFCCs) per command, no audio. Written only while you record words |
 | `schemaVersion` | The storage layout version, currently 3 |
 
@@ -229,7 +242,8 @@ Do this first on a normal HTML5 video before trying streaming sites:
 8. Favorite a video from its card header (works while collapsed) and a timestamp from its row, then check **Favorites only**: both videos appear — the favorited video with all its scenes, the other with only the favorited timestamp.
 9. Use overlay **Quick Save**, **Mark range start/end** and **Open Library**. Confirm the overlay lists every saved time of the current video, updates when you save or delete one, and jumps when clicked, while notes and titles appear only in the popup/Library. Try popup capture while playback continues, customized single-key/numpad shortcuts, and independent Settings changes from two extension pages.
 10. Serve the test page over `http://localhost` (for example `python3 -m http.server`) and press **Turn off here** in the popup. Confirm that the overlay disappears, page hotkeys do nothing, and the toolbar badge reads **OFF**. Then open a scene from the Library and confirm the jump still lands. Press **Turn on here** and confirm everything comes back without a reload. Repeat with **Pause everywhere** / **Resume**, which also covers `file://` pages.
-11. With voice off, batch **Open Random** 3 videos in the Library, click the first one's tab and confirm it starts at its first saved timestamp, then press `Alt+Shift+K` / `Alt+Shift+J` to move between them. Press `Alt+Shift+R` and confirm the new video opens at its first saved timestamp.
+11. In Settings → Data, click **Back Up Now** three times with a saved time added between each, and confirm `Downloads/SceneMarks/` holds exactly `scenemarks-backup-1.json` and `scenemarks-backup-2.json`, with no `(1)` copies. Click it again without a change and confirm it says nothing changed. Import the newer file into a fresh profile and confirm every video and scene is back.
+12. With voice off, batch **Open Random** 3 videos in the Library, click the first one's tab and confirm it starts at its first saved timestamp, then press `Alt+Shift+K` / `Alt+Shift+J` to move between them. Press `Alt+Shift+R` and confirm the new video opens at its first saved timestamp.
 
 Voice commands (headphones recommended):
 

@@ -241,6 +241,29 @@
         <section class="settings-section danger-section">
           <h2>Data</h2>
           <p class="hint">Data stays in this browser profile's chrome.storage.local. Export from the library before clearing data.</p>
+          <div class="backup-block">
+            <p class="field-label">Automatic backup</p>
+            <label class="switch-row">
+              <input id="backupEnabled" type="checkbox">
+              <span>Back up the library to the downloads folder</span>
+            </label>
+            <label>
+              Check for changes every
+              <select id="backupIntervalHours">
+                <option value="6">6 hours</option>
+                <option value="12">12 hours</option>
+                <option value="24">24 hours</option>
+                <option value="72">3 days</option>
+                <option value="168">7 days</option>
+              </select>
+            </label>
+            <div class="site-add-row">
+              <button id="backupNowButton" class="secondary-button" type="button">Back Up Now</button>
+              <button id="exportDataButton" class="secondary-button" type="button">Export JSON</button>
+            </div>
+            <p id="backupStatusLabel" class="hint" role="status">No backup yet.</p>
+            <p class="hint">Backups go to two files only, SceneMarks/scenemarks-backup-1.json and scenemarks-backup-2.json in the browser's downloads folder. Each backup overwrites the older of the two, and nothing is written while the library is unchanged, so the other file is always an earlier copy. Import either file from the Library to restore. The files hold your titles, page addresses, times, notes and tags as plain JSON. These changes apply right away.</p>
+          </div>
           <div class="storage-meter">
             <div id="storageMeterBar" class="storage-meter__bar" role="progressbar" aria-label="SceneMarks storage usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
               <div id="storageMeterFill" class="storage-meter__fill"></div>

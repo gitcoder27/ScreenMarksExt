@@ -51,7 +51,16 @@ function loadWorker(seedEntries, options) {
   const updatedTabs = [];
   let offscreenOpen = Boolean(options && options.offscreenOpen);
 
-  const context = vm.createContext({ console, crypto, setImmediate, setTimeout, clearTimeout, URL });
+  const context = vm.createContext({ console, crypto, setImmediate, setTimeout, clearTimeout, URL, TextEncoder, btoa });
+  // chrome.downloads double: `disk` is the downloads folder (path -> text),
+  // overwritten in place like conflictAction "overwrite"; `downloads` logs
+  // each download call and `erased` each erase.
+  const disk = new Map();
+  const downloadLog = [];
+  const erased = [];
+  const downloadItems = new Map();
+  const downloadListeners = new Set();
+  const alarms = new Map();
   context.importScripts = (...files) => {
     files.forEach((file) => {
       const fullPath = path.join(WORKER_DIR, file);
@@ -71,6 +80,41 @@ function loadWorker(seedEntries, options) {
       onMessage: event("onMessage")
     },
     commands: { onCommand: event("onCommand") },
+    alarms: {
+      get: async (name) => alarms.get(name),
+      create: async (name, info) => {
+        alarms.set(name, { name, ...info });
+      },
+      onAlarm: event("alarms.onAlarm")
+    },
+    downloads: {
+      download: async (options) => {
+        downloadLog.push(options);
+        if (options && options.fail) throw new Error("fail");
+        const id = downloadLog.length;
+        const match = /^data:application\/json;base64,(.*)$/.exec(options.url);
+        const text = Buffer.from(match[1], "base64").toString("utf8");
+        const finalName = (options && options.forceName) || options.filename;
+        disk.set(finalName, text);
+        downloadItems.set(id, { id, state: "in_progress", filename: `/downloads/${finalName}` });
+        setImmediate(() => {
+          downloadItems.get(id).state = "complete";
+          downloadListeners.forEach((listener) => listener({ id, state: { previous: "in_progress", current: "complete" } }));
+        });
+        return id;
+      },
+      search: async ({ id }) => (downloadItems.has(id) ? [{ ...downloadItems.get(id) }] : []),
+      erase: async ({ id }) => {
+        erased.push(id);
+        downloadItems.delete(id);
+        return [id];
+      },
+      removeFile: async () => {},
+      onChanged: {
+        addListener: (listener) => downloadListeners.add(listener),
+        removeListener: (listener) => downloadListeners.delete(listener)
+      }
+    },
     windows: { update: async () => {} },
     offscreen: {
       createDocument: async ({ url }) => {
@@ -140,7 +184,10 @@ function loadWorker(seedEntries, options) {
 
   const file = path.join(WORKER_DIR, "service-worker.js");
   vm.runInContext(fs.readFileSync(file, "utf8"), context, { filename: file });
-  return { badges, context, listeners, openedTabs, store, session, offscreenLog, runtimeMessages, tabMessages, updatedTabs };
+  return {
+    badges, context, listeners, openedTabs, store, session, offscreenLog, runtimeMessages, tabMessages, updatedTabs,
+    alarms, disk, downloadLog, erased
+  };
 }
 
 function settle() {
@@ -257,7 +304,7 @@ test("the worker's RPC whitelist matches the storage client's mutation methods",
   const { context } = loadWorker({});
   const whitelist = vm.runInContext("Array.from(STORAGE_RPC_METHODS).sort()", context);
   const clientMethods = vm.runInContext(
-    "Object.keys(SceneMarks.Storage.createClient()).filter((name) => !['getState', 'getScenesForVideo', 'getSettings', 'getVoiceProfile'].includes(name)).sort()",
+    "Object.keys(SceneMarks.Storage.createClient()).filter((name) => !['getState', 'getScenesForVideo', 'getSettings', 'getVoiceProfile', 'getBackupStatus'].includes(name)).sort()",
     context
   );
 
@@ -910,4 +957,201 @@ test("lineup step messages are refused from pages, extension pages and backgroun
   assert.match(response.error, /No lineup/);
   assert.deepEqual(empty.work.updatedTabs, []);
   assert.deepEqual(empty.work.tabMessages, []);
+});
+
+// ---- Automatic backup -------------------------------------------------
+const LIBRARY_PAGE = { url: "chrome-extension://scenemarks/src/library/library.html" };
+const OPTIONS_PAGE = { url: "chrome-extension://scenemarks/src/options/options.html" };
+
+function backupLibrary(count = 3) {
+  const ids = ["vidAAAAAAA1", "vidBBBBBBB2", "vidCCCCCCC3", "vidDDDDDDD4"].slice(0, count);
+  return videoEntries(Object.fromEntries(ids.map((id) => [id, videoEntry(id)])));
+}
+
+async function backupWorker(seed, settings) {
+  const work = loadWorker({ ...seed, settings: { backup: { enabled: true, intervalHours: 24 }, ...settings } });
+  await settle();
+  return work;
+}
+
+function fireAlarm(work) {
+  work.listeners["alarms.onAlarm"].forEach((listener) => listener({ name: "scenemarks-backup" }));
+  return settle();
+}
+
+function backupNow(work, sender = OPTIONS_PAGE) {
+  return sendToWorker(work.listeners, { type: "SCENEMARKS_BACKUP_NOW" }, sender);
+}
+
+test("the worker arms an hourly backup alarm", async () => {
+  const work = await backupWorker(backupLibrary());
+  assert.equal(work.alarms.get("scenemarks-backup").periodInMinutes, 60);
+});
+
+test("a due backup writes the library to the first file, overwriting, then erases the download entry", async () => {
+  const work = await backupWorker(backupLibrary());
+  await fireAlarm(work);
+  assert.equal(work.downloadLog.length, 1);
+  const call = work.downloadLog[0];
+  assert.equal(call.filename, "SceneMarks/scenemarks-backup-1.json");
+  assert.equal(call.conflictAction, "overwrite");
+  assert.equal(call.saveAs, false);
+  assert.deepEqual(work.erased, [1]);
+  const status = work.store.raw("backupStatus");
+  assert.equal(status.slot, 1);
+  assert.equal(status.videoCount, 3);
+  assert.equal(status.sceneCount, 6);
+  assert.equal(status.error, "");
+});
+
+test("disabled, not due, or unchanged: no download and no storage write", async () => {
+  // Disabled.
+  const off = await backupWorker(backupLibrary(), { backup: { enabled: false } });
+  let writes = off.store.writes;
+  await fireAlarm(off);
+  assert.equal(off.downloadLog.length, 0);
+  assert.equal(off.store.writes, writes);
+
+  // Not due: backed up an hour ago with a 24-hour interval.
+  const work = await backupWorker(backupLibrary());
+  await fireAlarm(work);
+  writes = work.store.writes;
+  await fireAlarm(work);
+  assert.equal(work.downloadLog.length, 1);
+  assert.equal(work.store.writes, writes);
+
+  // Due again but unchanged: the idle pass downloads and writes nothing.
+  const status = work.store.raw("backupStatus");
+  work.store.local.set({ backupStatus: { ...status, lastBackupAt: "2020-01-01T00:00:00.000Z" } }, () => {});
+  writes = work.store.writes;
+  await fireAlarm(work);
+  assert.equal(work.downloadLog.length, 1);
+  assert.equal(work.store.writes, writes);
+  // "Back up now" also skips an unchanged library, and says so.
+  const response = await backupNow(work);
+  assert.equal(response.ok, true);
+  assert.equal(response.skipped, "unchanged");
+  assert.equal(work.downloadLog.length, 1);
+  assert.equal(work.store.writes, writes);
+});
+
+test("ten backups with a change between each use only the two files, alternating", async () => {
+  const work = await backupWorker(backupLibrary());
+  for (let index = 0; index < 10; index += 1) {
+    const response = await backupNow(work);
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.skipped, undefined);
+    const saved = await work.context.SceneMarks.Storage.saveScene(
+      { videoKey: "youtube:vidAAAAAAA1", platform: "youtube", canonicalUrl: "https://www.youtube.com/watch?v=vidAAAAAAA1" },
+      { startSeconds: 1000 + index * 60 }
+    );
+    assert.equal(saved.ok, true);
+  }
+  assert.deepEqual(work.downloadLog.map((call) => call.filename.slice(-6)), [
+    "1.json", "2.json", "1.json", "2.json", "1.json", "2.json", "1.json", "2.json", "1.json", "2.json"
+  ]);
+  assert.deepEqual([...work.disk.keys()].sort(), [
+    "SceneMarks/scenemarks-backup-1.json", "SceneMarks/scenemarks-backup-2.json"
+  ]);
+  // The newer file holds one more scene than the older.
+  const newer = JSON.parse(work.disk.get("SceneMarks/scenemarks-backup-2.json"));
+  const older = JSON.parse(work.disk.get("SceneMarks/scenemarks-backup-1.json"));
+  assert.equal(newer.videos["youtube:vidAAAAAAA1"].scenes.length, older.videos["youtube:vidAAAAAAA1"].scenes.length + 1);
+  assert.equal(work.erased.length, 10);
+});
+
+test("a backup file imports back into an empty library unchanged", async () => {
+  const work = await backupWorker(backupLibrary(4));
+  await backupNow(work);
+  const file = work.disk.get("SceneMarks/scenemarks-backup-1.json");
+
+  const fresh = loadWorker({});
+  await settle();
+  const response = await sendToWorker(fresh.listeners, {
+    type: "SCENEMARKS_STORAGE_RPC", payload: { method: "importState", args: [JSON.parse(file), { merge: true }] }
+  }, LIBRARY_PAGE);
+  assert.equal(response.ok, true);
+  assert.equal(response.result.videoCount, 4);
+  await settle();
+  const restored = fresh.store.readState().videos;
+  const original = work.store.readState().videos;
+  assert.deepEqual(Object.keys(restored).sort(), Object.keys(original).sort());
+  for (const key of Object.keys(original)) {
+    assert.deepEqual(restored[key].scenes.map((scene) => [scene.id, scene.startSeconds]),
+      original[key].scenes.map((scene) => [scene.id, scene.startSeconds]));
+  }
+});
+
+test("an empty library is never backed up, so it cannot overwrite a good copy", async () => {
+  const work = await backupWorker({});
+  const writes = work.store.writes;
+  await fireAlarm(work);
+  const response = await backupNow(work);
+  assert.equal(response.skipped, "empty");
+  assert.equal(work.downloadLog.length, 0);
+  assert.equal(work.store.writes, writes);
+});
+
+test("an idle alarm pass makes zero storage writes and touches only small keys", async () => {
+  const work = await backupWorker(backupLibrary(), { backup: { enabled: false } });
+  const writes = work.store.writes;
+  const reads = work.store.readLog.length;
+  await fireAlarm(work);
+  assert.equal(work.store.writes, writes);
+  assert.ok(work.store.readLog.slice(reads).every((keys) => keys && !keys.some((key) => key.startsWith("video:"))));
+});
+
+test("a failed backup records the error once and keeps the last good slot", async () => {
+  const work = await backupWorker(backupLibrary());
+  await backupNow(work);
+  const download = work.context.chrome.downloads.download;
+  work.context.chrome.downloads.download = async () => {
+    throw new Error("disk full");
+  };
+  await work.context.SceneMarks.Storage.deleteScene("youtube:vidAAAAAAA1", "vidAAAAAAA1-a");
+  const failed = await backupNow(work);
+  assert.equal(failed.ok, false);
+  const status = work.store.raw("backupStatus");
+  assert.equal(status.slot, 1);
+  assert.match(status.error, /disk full/);
+  const writes = work.store.writes;
+  await backupNow(work);
+  assert.equal(work.store.writes, writes);
+  // The next good backup goes to the other file and clears the error.
+  work.context.chrome.downloads.download = download;
+  await backupNow(work);
+  assert.equal(work.store.raw("backupStatus").slot, 2);
+  assert.equal(work.store.raw("backupStatus").error, "");
+});
+
+test("a renamed download is deleted, so the folder never gets a third file", async () => {
+  const work = await backupWorker(backupLibrary());
+  const removed = [];
+  const download = work.context.chrome.downloads.download;
+  work.context.chrome.downloads.download = (options) => download({ ...options, forceName: "SceneMarks/scenemarks-backup-1 (1).json" });
+  work.context.chrome.downloads.removeFile = async (id) => {
+    removed.push(id);
+  };
+  const response = await backupNow(work);
+  assert.equal(response.ok, false);
+  assert.deepEqual(removed, [1]);
+  assert.equal(work.store.raw("backupStatus").slot, 0);
+});
+
+test("only extension pages may start a backup", async () => {
+  const work = await backupWorker(backupLibrary());
+  const response = await backupNow(work, { url: "https://example.com/", tab: { id: 4, active: true }, frameId: 0 });
+  assert.equal(response.ok, false);
+  assert.equal(work.downloadLog.length, 0);
+});
+
+test("turning backup on backs up soon", async () => {
+  const work = await backupWorker(backupLibrary(), { backup: { enabled: false } });
+  const before = work.store.raw("settings");
+  await work.context.SceneMarks.Storage.updateSettings({ backup: { enabled: true } });
+  const after = work.store.raw("settings");
+  work.listeners["storage.onChanged"].forEach((listener) => listener({ settings: { oldValue: before, newValue: after } }, "local"));
+  await settle();
+  assert.equal(work.downloadLog.length, 1);
+  assert.equal(after.backup.intervalHours, 24);
 });

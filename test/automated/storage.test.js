@@ -321,6 +321,13 @@ test("updateSettings persists merged settings", async () => {
   assert.equal(settings.hotkeys.quickSave, SceneMarks.Constants.DEFAULT_SETTINGS.hotkeys.quickSave);
 });
 
+test("updateSettings merges backup fields without dropping the others", async () => {
+  await Storage.updateSettings({ backup: { enabled: true } });
+  const settings = await Storage.updateSettings({ backup: { intervalHours: 72 } });
+  assert.deepEqual(settings.backup, { enabled: true, intervalHours: 72 });
+  assert.deepEqual(store.readState().settings.backup, { enabled: true, intervalHours: 72 });
+});
+
 test("updateSettings merges voice fields without dropping the others", async () => {
   await Storage.updateSettings({ voice: { enabled: true, sensitivity: 0.8 } });
   const settings = await Storage.updateSettings({ voice: { micDeviceId: "abc", micLabel: "MacBook Pro Microphone" } });

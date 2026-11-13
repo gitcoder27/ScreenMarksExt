@@ -236,6 +236,40 @@
     return { featureVersion, commands };
   }
 
+  function normalizeBackupSettings(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const { BACKUP_INTERVAL_CHOICES } = SceneMarks.Constants;
+    return {
+      enabled: source.enabled === true,
+      intervalHours: BACKUP_INTERVAL_CHOICES.includes(source.intervalHours)
+        ? source.intervalHours
+        : DEFAULT_SETTINGS.backup.intervalHours
+    };
+  }
+
+  // The backupStatus key: the last successful backup (time, slot 1 or 2,
+  // the library fingerprint it saved) and the last error, if any. Fixed
+  // size; slot 0 means no backup yet.
+  function normalizeBackupStatus(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const time = (raw) => {
+      const text = sanitizeText(raw, 60);
+      return text && Number.isFinite(Date.parse(text)) ? text : null;
+    };
+    const slot = source.slot === 1 || source.slot === 2 ? source.slot : 0;
+    const lastBackupAt = slot ? time(source.lastBackupAt) : null;
+    return {
+      lastBackupAt,
+      slot: lastBackupAt ? slot : 0,
+      fingerprint: lastBackupAt ? sanitizeText(source.fingerprint, 200) : "",
+      videoCount: lastBackupAt && Number.isSafeInteger(source.videoCount) && source.videoCount >= 0 ? source.videoCount : 0,
+      sceneCount: lastBackupAt && Number.isSafeInteger(source.sceneCount) && source.sceneCount >= 0 ? source.sceneCount : 0,
+      bytes: lastBackupAt && Number.isSafeInteger(source.bytes) && source.bytes >= 0 ? source.bytes : 0,
+      error: sanitizeText(source.error, 300),
+      errorAt: source.error ? time(source.errorAt) : null
+    };
+  }
+
   function normalizeSettings(value) {
     const source = value && typeof value === "object" ? value : {};
     const duplicateThresholdSeconds = Number(source.duplicateThresholdSeconds);
@@ -255,6 +289,7 @@
           ? Math.min(duplicateThresholdSeconds, 600)
           : DEFAULT_SETTINGS.duplicateThresholdSeconds,
       voice: normalizeVoiceSettings(source.voice),
+      backup: normalizeBackupSettings(source.backup),
       hotkeys: normalizeHotkeys(source.hotkeys)
     };
   }
@@ -441,6 +476,8 @@
     hostMatchesSite,
     isEnabledForHost,
     mainDomainForHost,
+    normalizeBackupSettings,
+    normalizeBackupStatus,
     normalizeDraft,
     normalizeIdentity,
     normalizePendingJump,

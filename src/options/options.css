@@ -409,3 +409,10 @@ input[type="range"] {
     grid-row: auto;
   }
 }
+
+.backup-block {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}

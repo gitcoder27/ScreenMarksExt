@@ -533,6 +533,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
   // Turning voice on or off opens or closes the microphone document; any
   // other voice setting (mic, sensitivity) is reloaded by the engine.
+  // Turning backup on backs up soon, not an hour later.
+  if (!previous.backup.enabled && badgeSettings.backup.enabled) {
+    queueBackup({ manual: false });
+  }
   if (previous.voice.enabled !== badgeSettings.voice.enabled) {
     syncVoiceDocument(badgeSettings.voice.enabled);
   } else if (JSON.stringify(previous.voice) !== JSON.stringify(badgeSettings.voice)) {
@@ -1017,6 +1021,200 @@ async function toggleVoiceFromShortcut() {
     : "Voice commands on. Record your words in Settings first.");
 }
 
+// ---------------------------------------------------------------------
+// Automatic local backup. Exactly two fixed files in the downloads folder,
+// SceneMarks/scenemarks-backup-1.json and -2.json, written alternately with
+// conflictAction "overwrite": the folder never holds a third file, and the
+// older file stays a real earlier copy because nothing is written while the
+// library is unchanged. No offscreen document (voice owns the only one):
+// the worker downloads a data: URL itself.
+const BACKUP_ALARM = "scenemarks-backup";
+const BACKUP_DOWNLOAD_TIMEOUT_MS = 60000;
+// Alarms are not exact; a backup due within this margin counts as due.
+const BACKUP_DUE_SLACK_MS = 5 * 60 * 1000;
+let backupWork = Promise.resolve();
+
+// FNV-1a over the text: cheap, and changes when any saved field does.
+function hashText(text) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+// Video count, scene count, the newest updatedAt and a hash of every video,
+// in key order. Settings, the range draft and the queued jump are left out:
+// a backup is for the library.
+function libraryFingerprint(videos) {
+  const list = Object.values(videos).sort((a, b) => (a.videoKey < b.videoKey ? -1 : a.videoKey > b.videoKey ? 1 : 0));
+  const sceneCount = list.reduce((total, video) => total + video.scenes.length, 0);
+  const newest = list.reduce((latest, video) => (video.updatedAt > latest ? video.updatedAt : latest), "");
+  return {
+    fingerprint: `${list.length}:${sceneCount}:${newest}:${hashText(JSON.stringify(list))}`,
+    videoCount: list.length,
+    sceneCount
+  };
+}
+
+function utf8Base64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function isBackupDue(settings, status, now) {
+  if (!status.lastBackupAt) return true;
+  const elapsed = now - Date.parse(status.lastBackupAt);
+  return !(elapsed >= 0 && elapsed < settings.backup.intervalHours * 3600 * 1000 - BACKUP_DUE_SLACK_MS);
+}
+
+// Resolves once the download completes or fails, with its final item.
+function waitForDownload(downloadId) {
+  return new Promise((resolve) => {
+    let finished = false;
+    let timer = null;
+    const finish = (result) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      chrome.downloads.onChanged.removeListener(listener);
+      resolve(result);
+    };
+    const check = () => chrome.downloads.search({ id: downloadId }).then(([item]) => {
+      if (!item) finish({ ok: false, error: "The backup download disappeared." });
+      else if (item.state === "complete") finish({ ok: true, item });
+      else if (item.state === "interrupted") finish({ ok: false, error: `The backup download failed (${item.error || "interrupted"}).` });
+    }).catch(() => {});
+    const listener = (delta) => {
+      if (delta && delta.id === downloadId && delta.state) check();
+    };
+    chrome.downloads.onChanged.addListener(listener);
+    timer = setTimeout(() => finish({ ok: false, error: "The backup download did not finish." }), BACKUP_DOWNLOAD_TIMEOUT_MS);
+    check();
+  });
+}
+
+function baseName(filePath) {
+  return String(filePath || "").split(/[\\/]/).pop();
+}
+
+// Records a failure next to the last success. A repeat of the same error
+// writes nothing.
+async function recordBackupError(message) {
+  const { Storage, Schema, Constants } = SceneMarks;
+  const key = Constants.STORAGE_KEYS.BACKUP_STATUS;
+  await Storage.updateRawKeys(async (get) => {
+    const current = Schema.normalizeBackupStatus((await get([key]))[key]);
+    if (current.error === message) return Storage.SKIP_WRITE;
+    return { set: { [key]: Schema.normalizeBackupStatus({ ...current, error: message, errorAt: new Date().toISOString() }) } };
+  });
+}
+
+// One backup pass. The alarm pass (manual false) acts only when backup is
+// on and due; "Back up now" (manual true) skips those two checks. Both
+// write nothing when the library is empty or unchanged since the last
+// backup, so an idle pass makes no storage write and no download.
+async function runBackup({ manual = false } = {}) {
+  const { Storage, Schema, Constants } = SceneMarks;
+  if (!chrome.downloads) {
+    return { ok: false, error: "Backups need the downloads permission." };
+  }
+  const settings = await Storage.getSettings();
+  if (!manual && !settings.backup.enabled) {
+    return { ok: true, skipped: "disabled" };
+  }
+  const status = await Storage.getBackupStatus();
+  if (!manual && !isBackupDue(settings, status, Date.now())) {
+    return { ok: true, skipped: "not-due" };
+  }
+
+  const state = await Storage.getState();
+  const summary = libraryFingerprint(state.videos);
+  // An emptied library must not overwrite a good copy.
+  if (!summary.videoCount) {
+    return { ok: true, skipped: "empty", message: "The library is empty, so there is nothing to back up." };
+  }
+  if (summary.fingerprint === status.fingerprint) {
+    return { ok: true, skipped: "unchanged", message: "Nothing changed since the last backup." };
+  }
+
+  const slot = status.slot === 1 ? 2 : 1;
+  const filename = Constants.BACKUP_FILENAMES[slot - 1];
+  // The same single-object shape as the Library's Export JSON, so Import
+  // accepts it.
+  const json = JSON.stringify(state);
+  let downloadId = null;
+  let outcome;
+  try {
+    downloadId = await chrome.downloads.download({
+      url: `data:application/json;base64,${utf8Base64(json)}`,
+      filename,
+      conflictAction: "overwrite",
+      saveAs: false
+    });
+    outcome = await waitForDownload(downloadId);
+  } catch (error) {
+    outcome = { ok: false, error: `The backup could not be saved (${(error && error.message) || error}).` };
+  }
+
+  // Overwrite must replace the file. Should the browser pick another name
+  // anyway, that extra file is deleted: the folder never holds a third.
+  if (outcome.ok && baseName(outcome.item.filename) !== baseName(filename)) {
+    await chrome.downloads.removeFile(downloadId).catch(() => {});
+    outcome = { ok: false, error: "The browser would not overwrite the backup file, so the backup was not kept." };
+  }
+  // The file stays on disk; only the entry in the downloads list goes.
+  if (downloadId !== null) {
+    await chrome.downloads.erase({ id: downloadId }).catch(() => {});
+  }
+  if (!outcome.ok) {
+    await recordBackupError(outcome.error);
+    return { ok: false, error: outcome.error };
+  }
+
+  const key = Constants.STORAGE_KEYS.BACKUP_STATUS;
+  const saved = Schema.normalizeBackupStatus({
+    lastBackupAt: new Date().toISOString(),
+    slot,
+    fingerprint: summary.fingerprint,
+    videoCount: summary.videoCount,
+    sceneCount: summary.sceneCount,
+    bytes: new TextEncoder().encode(json).length
+  });
+  await Storage.updateRawKeys(async () => ({ set: { [key]: saved } }));
+  return { ok: true, status: saved, filename };
+}
+
+// Alarm, settings change and "Back up now" never run two passes at once.
+function queueBackup(options) {
+  const run = backupWork.then(() => runBackup(options));
+  backupWork = run.catch(() => {});
+  return run.catch((error) => ({ ok: false, error: (error && error.message) || String(error) }));
+}
+
+// The hourly check. Created when missing (a worker start after install,
+// update or reload); a browser start re-arms it a few minutes out.
+async function ensureBackupAlarm({ restart = false } = {}) {
+  if (!chrome.alarms) return;
+  if (!restart && await chrome.alarms.get(BACKUP_ALARM)) return;
+  await chrome.alarms.create(BACKUP_ALARM, { delayInMinutes: restart ? 5 : 60, periodInMinutes: 60 });
+}
+
+if (chrome.alarms) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm && alarm.name === BACKUP_ALARM) queueBackup({ manual: false });
+  });
+  ensureBackupAlarm().catch((error) => console.warn("SceneMarks backup alarm failed:", error));
+  chrome.runtime.onStartup.addListener(() => {
+    ensureBackupAlarm({ restart: true }).catch(() => {});
+  });
+}
+
 async function handleStorageRpc(payload, sender) {
   const method = payload && typeof payload.method === "string" ? payload.method : null;
   if (!payload || typeof payload !== "object" || !STORAGE_RPC_METHODS.has(method)) {
@@ -1146,6 +1344,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     return respondWith(handleVoiceCommand(message.payload), sendResponse);
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.BACKUP_NOW) {
+    if (!isExtensionPageSender(sender)) {
+      sendResponse({ ok: false, error: "Only SceneMarks pages may start a backup." });
+      return false;
+    }
+    return respondWith(queueBackup({ manual: true }), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.STORAGE_RPC) {

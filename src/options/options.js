@@ -81,6 +81,11 @@
       "lineupPreviousHotkey",
       "openBrowserShortcutsButton",
       "clearDataButton",
+      "backupEnabled",
+      "backupIntervalHours",
+      "backupNowButton",
+      "exportDataButton",
+      "backupStatusLabel",
       "storageMeterBar",
       "storageMeterFill",
       "storageMeterLabel",
@@ -260,6 +265,86 @@
     }
   }
 
+  // Automatic backup: the switch and interval apply right away, like the
+  // site switches; the status comes from the worker's backupStatus key.
+  function renderBackupSettings(settings) {
+    elements.backupEnabled.checked = settings.backup.enabled;
+    elements.backupIntervalHours.value = String(settings.backup.intervalHours);
+  }
+
+  function formatWhen(iso) {
+    const date = new Date(iso);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString() : iso;
+  }
+
+  function renderBackupStatus(status) {
+    const { BACKUP_FILENAMES } = SceneMarks.Constants;
+    const parts = [];
+    if (status.lastBackupAt) {
+      parts.push(`Last backup ${formatWhen(status.lastBackupAt)}: ${status.videoCount} videos, ${status.sceneCount} scenes, `
+        + `${formatBytes(status.bytes)} in ${BACKUP_FILENAMES[status.slot - 1]}.`);
+    } else {
+      parts.push("No backup yet.");
+    }
+    if (status.error) {
+      parts.push(`Last attempt failed${status.errorAt ? ` (${formatWhen(status.errorAt)})` : ""}: ${status.error}`);
+    }
+    elements.backupStatusLabel.textContent = parts.join(" ");
+  }
+
+  async function loadBackupStatus() {
+    try {
+      renderBackupStatus(await Storage.getBackupStatus());
+    } catch (_error) {
+      elements.backupStatusLabel.textContent = "Backup status is unavailable.";
+    }
+  }
+
+  async function saveBackupSettings() {
+    try {
+      const settings = await Storage.updateSettings({
+        backup: {
+          enabled: elements.backupEnabled.checked,
+          intervalHours: Number(elements.backupIntervalHours.value)
+        }
+      });
+      renderBackupSettings(settings);
+      setStatus(settings.backup.enabled ? "Automatic backup is on." : "Automatic backup is off.", false);
+    } catch (error) {
+      setStatus(storageStatusMessage(error), true);
+    }
+  }
+
+  async function backupNow() {
+    elements.backupNowButton.disabled = true;
+    let response = null;
+    try {
+      response = await chrome.runtime.sendMessage({ type: SceneMarks.Constants.MESSAGE_TYPES.BACKUP_NOW });
+    } catch (error) {
+      setStatus(storageStatusMessage(error), true);
+      return;
+    } finally {
+      elements.backupNowButton.disabled = false;
+    }
+    if (!response || !response.ok) {
+      setStatus((response && response.error) || "The backup failed.", true);
+      return;
+    }
+    setStatus(response.skipped ? response.message : `Backed up to ${response.filename}.`, false);
+  }
+
+  // The same single-object JSON as the Library's Export button.
+  async function exportData() {
+    const exportState = await Storage.getState();
+    const blob = new Blob([JSON.stringify(exportState, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `scenemarks-export-${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
   const SETTING_FIELDS = {
     enableFloatingButton: "checked",
     duplicateThresholdSeconds: "value", defaultJumpBehavior: "value",
@@ -279,6 +364,7 @@
   function synchronizeSettings(settings, previous = baseline) {
     const current = readForm();
     renderSiteSwitches(settings);
+    renderBackupSettings(settings);
     for (const [field, property] of Object.entries(SETTING_FIELDS)) {
       if (!previous || current[field] === previous[field]) elements[field][property] = settings[field];
     }
@@ -393,11 +479,19 @@
       }
     });
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      const change = changes[SceneMarks.Constants.STORAGE_KEYS.SETTINGS];
+      const { STORAGE_KEYS } = SceneMarks.Constants;
+      const change = changes[STORAGE_KEYS.SETTINGS];
       if (areaName === "local" && change) {
         synchronizeSettings(SceneMarks.Schema.normalizeSettings(change.newValue));
       }
+      if (areaName === "local" && changes[STORAGE_KEYS.BACKUP_STATUS]) {
+        renderBackupStatus(SceneMarks.Schema.normalizeBackupStatus(changes[STORAGE_KEYS.BACKUP_STATUS].newValue));
+      }
     });
+    elements.backupEnabled.addEventListener("change", saveBackupSettings);
+    elements.backupIntervalHours.addEventListener("change", saveBackupSettings);
+    elements.backupNowButton.addEventListener("click", backupNow);
+    elements.exportDataButton.addEventListener("click", exportData);
     elements.openLibraryButton.addEventListener("click", () => {
       chrome.tabs.create({ url: chrome.runtime.getURL("src/library/library.html") });
     });
@@ -415,5 +509,6 @@
     bindEvents();
     await loadSettings();
     await updateStorageMeter();
+    await loadBackupStatus();
   });
 })();
