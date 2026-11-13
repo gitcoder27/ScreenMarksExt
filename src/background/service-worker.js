@@ -108,6 +108,7 @@ const STORAGE_RPC_METHODS = new Set([
   "saveScene",
   "startRange",
   "endRange",
+  "cancelRange",
   "deleteScene",
   "updateScene",
   "updateVideo",

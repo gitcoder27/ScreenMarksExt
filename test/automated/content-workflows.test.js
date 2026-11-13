@@ -339,16 +339,17 @@ test("voice pause and play drive the video, and a blocked play says how to conti
   assert.equal((await voice(none, "pause")).ok, false);
 });
 
-test("voice mark saves the current time even when quick save asks for a note", async () => {
+test("voice mark and a quick save both save at once, even with an old quickSaveRequiresNote setting", async () => {
   const work = loadContent({ seed: { settings: { quickSaveRequiresNote: true } } });
   await flush();
   const result = await voice(work, "mark");
   assert.equal(result.ok, true);
   assert.equal(result.message, "Saved 01:00");
   assert.deepEqual(work.store.readState().videos[SNAPSHOT.videoKey].scenes.map((scene) => scene.startSeconds), [60]);
-  // The hotkey path still asks for a note.
-  const hotkey = await work.send({ type: "SCENEMARKS_QUICK_SAVE", payload: {} });
-  assert.equal(hotkey.requiresNote, true);
+  work.setSnapshot({ currentTimeSeconds: 120 });
+  const quick = await work.send({ type: "SCENEMARKS_QUICK_SAVE", payload: {} });
+  assert.equal(quick.ok, true);
+  assert.equal(quick.message, "Saved 02:00");
 });
 
 test("voice actions are refused where SceneMarks is switched off", async () => {
@@ -457,4 +458,84 @@ test("with only-with-video on, a tab reports its video appearing and going away"
   await flush();
   plain.detectorOptions().onContextChange();
   assert.equal(plain.messages.some((message) => message.type === "SCENEMARKS_VOICE_VIDEO_PRESENCE"), false);
+});
+
+function toastText(work) {
+  return work.document.body.children.find((node) => /scenemarks-toast/.test(node.className)).textContent;
+}
+
+test("browser-command saves and range marks show the same toasts as the page hotkeys", async () => {
+  const work = loadContent();
+  await flush();
+  const command = (type) => work.send({ type, payload: { quick: true, source: "browser-command" } });
+  await command("SCENEMARKS_QUICK_SAVE");
+  assert.equal(toastText(work), "Saved 01:00");
+  work.setSnapshot({ currentTimeSeconds: 61 });
+  await command("SCENEMARKS_QUICK_SAVE");
+  assert.equal(toastText(work), "Already saved near 01:01");
+  await command("SCENEMARKS_TOGGLE_RANGE");
+  assert.equal(toastText(work), "Range started at 01:01");
+  work.setSnapshot({ currentTimeSeconds: 90 });
+  await command("SCENEMARKS_TOGGLE_RANGE");
+  assert.equal(toastText(work), "Range saved 01:01 \u2192 01:30");
+  work.setSnapshot({ detected: false });
+  await command("SCENEMARKS_QUICK_SAVE");
+  assert.equal(toastText(work), "No video found \u2014 start playback first");
+
+  // The same saves from the popup (no source) leave the page alone.
+  const quiet = loadContent();
+  await flush();
+  await quiet.send({ type: "SCENEMARKS_SAVE_TIMESTAMP", payload: {} });
+  assert.equal(toastText(quiet), "");
+});
+
+test("a page hotkey and a browser command on a switched-off site save nothing and show nothing", async () => {
+  const work = loadContent({ seed: { settings: { disabledSites: ["example.com"] } } });
+  await flush();
+  const result = await work.send({ type: "SCENEMARKS_QUICK_SAVE", payload: { quick: true, source: "browser-command" } });
+  assert.equal(result.inactive, true);
+  assert.equal(toastText(work), "");
+  assert.equal(work.store.writes, 0);
+});
+
+test("overlay buttons say what happened, built from the playback time, and drop focus after a click", async () => {
+  const work = loadContent();
+  await flush();
+  const buttons = work.document.body.children[0].children[1].children.filter((node) => node.tagName === "BUTTON");
+  const [save, range] = buttons;
+  let blurred = 0;
+  save.blur = () => { blurred += 1; };
+  await save.emit("click", { isTrusted: true, detail: 1 });
+  assert.equal(toastText(work), "Saved 01:00");
+  assert.equal(blurred, 1);
+  await save.emit("click", { isTrusted: true, detail: 0 });
+  assert.equal(toastText(work), "Already saved near 01:00");
+  assert.equal(blurred, 1, "keyboard presses keep focus");
+  work.setSnapshot({ currentTimeSeconds: 724 });
+  await range.emit("click", { isTrusted: true, detail: 1 });
+  assert.equal(toastText(work), "Range started at 12:04");
+  work.setSnapshot({ currentTimeSeconds: 790 });
+  await range.emit("click", { isTrusted: true, detail: 1 });
+  assert.equal(toastText(work), "Range saved 12:04 \u2192 13:10");
+  // A second range over the same span is rejected, and the toast says it
+  // stays open.
+  work.setSnapshot({ currentTimeSeconds: 725 });
+  await range.emit("click", { isTrusted: true, detail: 1 });
+  work.setSnapshot({ currentTimeSeconds: 791 });
+  await range.emit("click", { isTrusted: true, detail: 1 });
+  assert.equal(toastText(work), "Range 12:05 \u2192 13:11 is already saved \u00b7 still open from 12:05");
+  assert.equal(work.store.readState().activeRangeDraft.startSeconds, 725);
+  work.setSnapshot({ detected: false });
+  await save.emit("click", { isTrusted: true, detail: 1 });
+  assert.equal(toastText(work), "No video found \u2014 start playback first");
+  assert.doesNotMatch(pageText(work), /confidential|Current video/);
+});
+
+test("the quick-save hotkey reports a duplicate instead of a bare error", async () => {
+  const work = loadContent();
+  await flush();
+  await work.events.emit("keydown", keyboard("KeyS"));
+  assert.equal(toastText(work), "Saved 01:00");
+  await work.events.emit("keydown", keyboard("KeyS"));
+  assert.equal(toastText(work), "Already saved near 01:00");
 });

@@ -247,7 +247,6 @@
       enableGenericSites: source.enableGenericSites !== false,
       enablePageHotkeys: source.enablePageHotkeys !== false,
       defaultJumpBehavior: jumpBehavior,
-      quickSaveRequiresNote: source.quickSaveRequiresNote === true,
       duplicateThresholdSeconds:
         Number.isFinite(duplicateThresholdSeconds) && duplicateThresholdSeconds >= 0
           ? Math.min(duplicateThresholdSeconds, 600)

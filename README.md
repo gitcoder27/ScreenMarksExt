@@ -10,7 +10,7 @@ It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#da
 - Generic HTML5 video detection with active-video scoring.
 - Local timestamp and scene-range storage.
 - Safe note/tag rendering with `textContent`.
-- Popup controls for save, range start/end, jump, edit, and delete, with two-step arm-then-confirm deletion.
+- Popup controls for save, range start/end (and cancelling an open range), jump, edit, and delete, with two-step arm-then-confirm deletion.
 - Optional draggable capture controls with an Open Library button.
 - Page-level customizable hotkeys from the extension settings page.
 - Settings page showing how much local `chrome.storage` space SceneMarks uses.
@@ -39,7 +39,7 @@ The same flow works in Chrome at `chrome://extensions`.
 2. Start playback so the page creates the active `<video>` element.
 3. Open SceneMarks.
 4. Click **Save Moment** to save the current timestamp with optional notes/tags.
-5. Click **Mark Scene Start**, continue playback, then click **Mark End** to save a range.
+5. Click **Mark Scene Start**, continue playback, then click **Mark End** to save a range. **Cancel range** drops a range you no longer want.
 6. Click **Jump** beside any saved scene to seek back to it.
 7. Use **Overlay On/Off** in the popup to show or hide the draggable page overlay.
 8. Use the overlay **Open Library** button to open saved videos in a private extension page.
@@ -50,7 +50,7 @@ The same flow works in Chrome at `chrome://extensions`.
 
 The draggable overlay offers **Quick Save**, **Mark range start/end**, and **Open Library**, and lists the saved timestamps of the video on the page. Click one to jump to it. Those times are the only saved data the overlay shows, so the page can read them while the overlay is on. Saved notes, titles, tags, other videos, favorites and deletion controls are available only in extension-origin popup/Library pages and are never rendered into a visited website's DOM, where page scripts could read them. Overlay actions ignore synthetic events.
 
-SceneMarks shows brief feedback notifications, including above fullscreen players where the browser supports popovers. Overlay capture feedback contains no saved annotations. Private search, favorites, random selection and editing are in the Library page.
+SceneMarks shows brief feedback notifications, including above fullscreen players where the browser supports popovers. Every save path says what happened: page hotkeys, the browser shortcuts (`Ctrl/Cmd+Shift+S/M`) and the overlay buttons all show the same toasts, such as `Saved 04:12`, `Already saved near 04:12`, `Range started at 12:04`, `Range saved 12:04 → 13:10`, or `No video found`. A range end that matches a saved range is not saved, and the toast says the range is still open; finish it elsewhere or press **Cancel range** in the popup. These toasts carry only fixed text and the current video's times, never saved notes, titles or tags. Private search, favorites, random selection and editing are in the Library page.
 
 Queued timestamp jumps are kept for up to 15 minutes. Library opens the destination through the worker, which binds the request to the new tab before navigating it. Only that tab can execute and consume the jump; an existing tab showing the same video stays untouched. Once the matching video is detected there, SceneMarks verifies the seek before consuming that specific request. Temporarily unready players retry with delays of 1–5 seconds until success, expiry, cancellation or navigation; failed retries do not produce repeated notifications. A newer request cannot be cleared by an older seek. The single pending slot means a newer opening replaces an older outstanding request. Ownerless requests from older versions require re-opening the scene; browser startup clears owned requests from the previous session, while ordinary worker wakes keep them.
 
@@ -95,7 +95,7 @@ Control playback with short spoken words while you watch, with no key presses. R
 | next | Jump to the next saved timestamp (like `Alt+Shift+N`) |
 | back | Jump back through saved timestamps (like `Alt+Shift+B`) |
 | pause / play | Pause or resume the video |
-| mark | Quick-save the current time (even when quick save normally asks for a note) |
+| mark | Quick-save the current time |
 | skip | Go to the next video in the lineup and play it from its first saved timestamp |
 | return | Go to the previous video in the lineup and play it from its first saved timestamp |
 | random | Open a saved video that is not open yet, at its first saved timestamp |
@@ -226,7 +226,7 @@ Voice commands (headphones recommended):
 
 1. Settings → **Voice Commands**: **Allow Microphone**, pick a mic, and record next, back, pause, play, mark, skip, return and random. Each should show "Recognized 3 of 3 takes". Use **Start Test** to check each word, and check that taps, coughs and other words are ignored.
 2. Turn voice on from the popup. Its **Voice** row should read **Listening**, and the mic indicator should light.
-3. On the test page with saved timestamps, say each word and confirm the toast and the action. "mark" should save even with **Quick save should ask for a note** checked.
+3. On the test page with saved timestamps, say each word and confirm the toast and the action.
 4. In the Library, batch **Open Random** 3 videos. On one of them, say "skip" and "return" and confirm each switch pauses the old video and plays the new one from its first saved timestamp, with the right `Video n/3` count. Close one lineup tab and confirm it is skipped. Say "random" and confirm a new video opens at its first mark.
 5. Turn on **Listen only while a tab with a video is active**, switch to a tab without a video, and confirm the mic indicator goes off within about 5 seconds and comes back on a video tab.
 6. Press `Alt+Shift+V` to turn voice off and on, restart the browser to check it stays off (and on, with **Turn voice back on after the browser restarts**), and switch the site off to check voice commands are refused there.

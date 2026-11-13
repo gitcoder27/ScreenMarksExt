@@ -292,3 +292,10 @@ test("normalizeVoiceProfile keeps known commands with well-formed templates only
   assert.deepEqual(Schema.normalizeVoiceProfile(null), { featureVersion: VOICE_FEATURE_VERSION, commands: {} });
   assert.equal(Schema.normalizeVoiceProfile({ featureVersion: 99, commands: {} }).featureVersion, 99);
 });
+
+test("an old settings object with quickSaveRequiresNote normalizes cleanly without it", () => {
+  const settings = Schema.normalizeSettings({ quickSaveRequiresNote: true, duplicateThresholdSeconds: 5 });
+  assert.equal("quickSaveRequiresNote" in settings, false);
+  assert.equal(settings.duplicateThresholdSeconds, 5);
+  assert.equal("quickSaveRequiresNote" in SceneMarks.Constants.DEFAULT_SETTINGS, false);
+});

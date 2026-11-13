@@ -340,14 +340,14 @@ test("overlapping updateState calls serialize so both writes survive", async () 
       return state;
     }),
     Storage.updateState((state) => {
-      state.settings.quickSaveRequiresNote = true;
+      state.settings.enableGenericSites = false;
       return state;
     })
   ]);
 
   const settings = store.readState().settings;
   assert.equal(settings.duplicateThresholdSeconds, 5);
-  assert.equal(settings.quickSaveRequiresNote, true);
+  assert.equal(settings.enableGenericSites, false);
 });
 
 test("a mutator returning SKIP_WRITE resolves without writing", async () => {
@@ -767,4 +767,27 @@ test("toggleVoiceEnabled flips voice inside the write queue and keeps the other 
     enabled: true, sensitivity: 0.5, micDeviceId: "mic-9", micLabel: "USB Mic",
     resumeOnStartup: false, autoOffMinutes: 0, onlyWithVideo: false
   });
+});
+
+test("cancelRange drops only the current video's open range", async () => {
+  await Storage.startRange(IDENTITY, 10);
+  assert.equal((await Storage.cancelRange(OTHER_IDENTITY.videoKey)).ok, false);
+  assert.ok((await Storage.getState({ videoKeys: [] })).activeRangeDraft);
+  assert.equal((await Storage.cancelRange(IDENTITY.videoKey)).ok, true);
+  assert.equal((await Storage.getState({ videoKeys: [] })).activeRangeDraft, null);
+  const writes = store.writes;
+  assert.equal((await Storage.cancelRange(IDENTITY.videoKey)).ok, false);
+  assert.equal(store.writes, writes);
+});
+
+test("a range end rejected as a duplicate keeps the range open and says from where", async () => {
+  await Storage.startRange(IDENTITY, 10);
+  assert.equal((await Storage.endRange(IDENTITY, 20)).ok, true);
+  await Storage.startRange(IDENTITY, 11);
+  const duplicate = await Storage.endRange(IDENTITY, 21);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.draft.startSeconds, 11);
+  assert.equal((await Storage.getState({ videoKeys: [] })).activeRangeDraft.startSeconds, 11);
+  const none = await Storage.endRange(OTHER_IDENTITY, 30);
+  assert.equal(none.noRange, true);
 });

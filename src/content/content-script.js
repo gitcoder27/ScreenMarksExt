@@ -32,7 +32,7 @@
 
   const SceneMarks = root.SceneMarks;
   const { MESSAGE_TYPES } = SceneMarks.Constants;
-  const { formatRange, formatSeconds } = SceneMarks.Time;
+  const { describeCapture, formatSeconds } = SceneMarks.Time;
   // Mutations must go through the service-worker RPC client (single writer)
   // so concurrent tabs cannot lose each other's read-modify-write updates;
   // reads stay local to this context. Storage is split per video, so the
@@ -314,6 +314,7 @@
     if (!snapshot.detected) {
       return {
         ok: false,
+        noVideo: true,
         snapshot,
         error: "No video detected \u2014 start playback first"
       };
@@ -322,6 +323,7 @@
     if (snapshot.platform === "generic" && getSettingsSync().enableGenericSites === false) {
       return {
         ok: false,
+        genericDisabled: true,
         snapshot,
         error: "Generic site support is disabled in SceneMarks settings."
       };
@@ -330,7 +332,7 @@
     if (payload && payload.capture) {
       const capture = payload.capture;
       if (capture.videoKey !== snapshot.videoKey || !Number.isFinite(capture.seconds) || capture.seconds < 0) {
-        return { ok: false, error: "The video changed. Start the capture again." };
+        return { ok: false, videoChanged: true, error: "The video changed. Start the capture again." };
       }
       return { ok: true, snapshot: { ...snapshot, currentTimeSeconds: capture.seconds } };
     }
@@ -354,20 +356,41 @@
     };
   }
 
+  // Adds the page toast for a capture as `feedback` ({ tone, text }: only
+  // times and fixed text from describeCapture, never saved notes or
+  // titles), and as `message` when it worked. The popup keeps reading the
+  // original `error`.
+  function withFeedback(action, result, seconds) {
+    const feedback = describeCapture(action, result, seconds);
+    return feedback.ok
+      ? { ...result, feedback, message: feedback.text }
+      : { ...result, feedback, error: result.error || feedback.text };
+  }
+
+  function showFeedback(result) {
+    if (!overlay || !result) return;
+    if (result.feedback) {
+      overlay.showToast(result.feedback.text, result.feedback.tone);
+    } else if (result.error) {
+      overlay.showToast(result.error, "error");
+    } else if (result.message) {
+      overlay.showToast(result.message, "success");
+    } else if (result.ok) {
+      overlay.showToast("Done", "info");
+    }
+  }
+
+  function snapshotSeconds(detected) {
+    return detected && detected.snapshot ? detected.snapshot.currentTimeSeconds : 0;
+  }
+
   async function saveTimestamp(payload) {
     const detected = requireDetectedVideo(payload);
     if (!detected.ok) {
-      return detected;
+      return withFeedback("save", detected, 0);
     }
 
-    const currentSettings = getSettingsSync();
     const note = payload && payload.note ? payload.note : "";
-
-    // Voice cannot type a note, so a spoken "mark" saves without one.
-    if (payload && payload.quick && !payload.fromVoice && currentSettings.quickSaveRequiresNote && !note.trim()) {
-      return { ok: false, requiresNote: true, error: "Quick save requires a note in settings" };
-    }
-
     const result = await Storage.saveScene(
       detected.snapshot,
       {
@@ -381,21 +404,22 @@
       { allowDuplicate: payload && payload.allowDuplicate === true }
     );
 
+    const seconds = snapshotSeconds(detected);
     if (result.duplicate && payload && payload.quick) {
-      return { ok: false, duplicate: true, error: "A nearby scene already exists" };
+      return withFeedback("save", { ok: false, duplicate: true, error: "A nearby scene already exists" }, seconds);
     }
 
     if (result.ok) {
       syncOverlayVisibility();
     }
 
-    return result;
+    return withFeedback("save", result, seconds);
   }
 
   async function startRange(payload) {
     const detected = requireDetectedVideo(payload);
     if (!detected.ok) {
-      return detected;
+      return withFeedback("rangeStart", detected, 0);
     }
 
     const result = await Storage.startRange(
@@ -406,37 +430,29 @@
 
     if (result.ok) {
       syncOverlayVisibility();
-      return {
-        ...result,
-        message: `Range start ${formatSeconds(result.draft.startSeconds)}`
-      };
     }
 
-    return result;
+    return withFeedback("rangeStart", result, snapshotSeconds(detected));
   }
 
   async function endRange(payload) {
     const detected = requireDetectedVideo(payload);
     if (!detected.ok) {
-      return detected;
+      return withFeedback("rangeEnd", detected, 0);
     }
 
     const result = await Storage.endRange(detected.snapshot, detected.snapshot.currentTimeSeconds, payload || {});
     if (result.ok) {
       syncOverlayVisibility();
-      return {
-        ...result,
-        message: `Range saved ${formatRange(result.scene.startSeconds, result.scene.endSeconds)}`
-      };
     }
 
-    return result;
+    return withFeedback("rangeEnd", result, snapshotSeconds(detected));
   }
 
   async function toggleRange(payload) {
     const detected = requireDetectedVideo(payload);
     if (!detected.ok) {
-      return detected;
+      return withFeedback("rangeStart", detected, 0);
     }
 
     const state = await Storage.getState({ videoKeys: [] });
@@ -704,11 +720,21 @@
     MESSAGE_TYPES.TOGGLE_RANGE
   ]);
 
+  // The browser-level shortcuts have no UI of their own, so their result
+  // shows as the same page toast the page hotkeys give.
   async function handleMessage(message) {
     if (CAPTURE_MESSAGE_TYPES.has(message.type) && !isActiveHere()) {
       return INACTIVE_RESPONSE;
     }
 
+    const result = await routeMessage(message);
+    if (CAPTURE_MESSAGE_TYPES.has(message.type) && message.payload && message.payload.source === "browser-command") {
+      showFeedback(result);
+    }
+    return result;
+  }
+
+  async function routeMessage(message) {
     switch (message.type) {
       case MESSAGE_TYPES.PING:
         return { ok: true };
@@ -839,12 +865,7 @@
       let action = null;
 
       if (shortcutMatches(event, hotkeys.quickSave)) {
-        action = async () => {
-          const result = await saveTimestamp({ quick: true });
-          return result.ok && result.scene
-            ? { ...result, message: `Saved ${formatSeconds(result.scene.startSeconds)}` }
-            : result;
-        };
+        action = () => saveTimestamp({ quick: true });
       } else if (shortcutMatches(event, hotkeys.toggleRange)) {
         action = () => toggleRange({ quick: true });
       } else if (shortcutMatches(event, hotkeys.startRange)) {
@@ -883,13 +904,7 @@
         result = errorResponse(error);
       }
 
-      if (overlay && result && result.error) {
-        overlay.showToast(result.error, "error");
-      } else if (overlay && result && result.message) {
-        overlay.showToast(result.message, "success");
-      } else if (overlay && result && result.ok) {
-        overlay.showToast("Done", "info");
-      }
+      showFeedback(result);
     };
 
     root.addEventListener("keydown", hotkeyListener, true);

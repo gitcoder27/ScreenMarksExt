@@ -208,6 +208,18 @@ dd {
   background: #facc15;
 }
 
+.primary-actions .secondary-action {
+  background: transparent;
+  border: 1px solid #475569;
+  color: #e2e8f0;
+  grid-column: 1 / -1;
+  padding: 6px 10px;
+}
+
+.primary-actions .secondary-action[hidden] {
+  display: none;
+}
+
 .section-heading {
   align-items: center;
   display: flex;

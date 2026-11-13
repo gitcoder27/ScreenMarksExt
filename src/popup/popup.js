@@ -256,6 +256,23 @@
     elements.rangeButton.textContent = isCurrentDraft
       ? `Mark End (${formatSeconds(draft.startSeconds)})`
       : "Mark Scene Start";
+    elements.cancelRangeButton.hidden = !isCurrentDraft;
+  }
+
+  async function cancelRange() {
+    const videoKey = latestContext && latestContext.context ? latestContext.context.videoKey : null;
+    if (!videoKey) return;
+    let response = null;
+    try {
+      response = await Storage.cancelRange(videoKey);
+    } catch (error) {
+      setStatus(storageErrorMessage(error), true);
+      return;
+    }
+
+    const cancelled = Boolean(response && response.ok);
+    await refreshContext();
+    setStatus(cancelled ? "Range cancelled." : "No range is open on this video.", !cancelled);
   }
 
   function renderScenes(context, scenes) {
@@ -423,7 +440,10 @@
       const shouldSave = confirm("A nearby scene range already exists. Save anyway?");
       if (shouldSave) {
         await saveRangeValue(value, true);
+        return;
       }
+      await refreshContext();
+      setStatus("Not saved: that range is already saved. The range is still open; mark a new end or cancel it.", false);
       return;
     }
 
@@ -626,6 +646,7 @@
       "durationLabel",
       "saveMomentButton",
       "rangeButton",
+      "cancelRangeButton",
       "sceneCountLabel",
       "sceneList",
       "openLibraryButton",
@@ -650,6 +671,7 @@
     elements.pauseAllButton.addEventListener("click", togglePauseEverywhere);
     elements.saveMomentButton.addEventListener("click", saveMoment);
     elements.rangeButton.addEventListener("click", handleRangeButton);
+    elements.cancelRangeButton.addEventListener("click", cancelRange);
     elements.toggleOverlayButton.addEventListener("click", toggleOverlay);
     elements.openLibraryButton.addEventListener("click", () => openExtensionPage("src/library/library.html"));
     elements.openOptionsButton.addEventListener("click", () => chrome.runtime.openOptionsPage());

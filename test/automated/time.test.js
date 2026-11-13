@@ -31,3 +31,23 @@ test("isValidSeconds and normalizeSeconds guard inputs", () => {
   assert.equal(Time.isValidSeconds("5"), false);
   assert.equal(Time.normalizeSeconds("bad"), 0);
 });
+
+test("describeCapture gives one fixed message per save outcome, with times only", () => {
+  const say = (action, result, seconds) => Time.describeCapture(action, result, seconds);
+  assert.deepEqual(say("save", { ok: true, scene: { note: "secret" } }, 252), { ok: true, tone: "success", text: "Saved 04:12" });
+  assert.deepEqual(say("save", { ok: false, duplicate: true }, 252), { ok: false, tone: "info", text: "Already saved near 04:12" });
+  assert.equal(say("favorite", { ok: true }, 252).text, "Favorited 04:12");
+  assert.equal(say("rangeStart", { ok: true }, 724).text, "Range started at 12:04");
+  assert.equal(say("rangeEnd", { ok: true, scene: { startSeconds: 724, endSeconds: 790, note: "secret" } }, 790).text,
+    "Range saved 12:04 → 13:10");
+  assert.equal(say("rangeEnd", { ok: false, duplicate: true, draft: { startSeconds: 724 } }, 790).text,
+    "Range 12:04 → 13:10 is already saved · still open from 12:04");
+  assert.equal(say("rangeEnd", { ok: false, noRange: true }, 790).text, "No range is open on this video");
+  assert.equal(say("rangeStart", { ok: false, conflict: true }, 5).tone, "error");
+  for (const action of ["save", "favorite", "rangeStart", "rangeEnd"]) {
+    assert.equal(say(action, { ok: false, noVideo: true }, 0).text, "No video found — start playback first");
+    assert.equal(say(action, { ok: false, inactive: true }, 0).text, "SceneMarks is off on this site");
+    // Unknown failures never echo the result's own text into the page.
+    assert.doesNotMatch(say(action, { ok: false, error: "secret note" }, 0).text, /secret/);
+  }
+});

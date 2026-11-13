@@ -50,7 +50,10 @@
       }, 3000);
     }
 
-    function addButton(label, action) {
+    const TONES = new Set(["success", "info", "error"]);
+
+    // successText: the fixed toast for an action without capture feedback.
+    function addButton(label, action, successText) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "scenemarks-overlay__secondary";
@@ -60,13 +63,24 @@
         button.disabled = true;
         try {
           const result = await action();
-          // Action results can contain saved scenes; only fixed feedback may
-          // cross into page DOM, even after a legitimate interaction.
-          showToast(result && result.ok ? "Done" : "Open the SceneMarks popup to continue.", result && result.ok ? "success" : "error");
+          // Action results can contain saved scenes; only the capture
+          // feedback (fixed text and this video's times, built by
+          // Time.describeCapture) or fixed text may cross into page DOM.
+          const feedback = result && result.feedback;
+          if (feedback && typeof feedback.text === "string" && TONES.has(feedback.tone)) {
+            showToast(feedback.text, feedback.tone);
+          } else if (result && result.inactive) {
+            showToast("SceneMarks is off on this site", "error");
+          } else {
+            showToast(result && result.ok ? successText || "Done" : "Something went wrong. Try the SceneMarks popup.", result && result.ok ? "success" : "error");
+          }
         } catch (_error) {
-          showToast("Open the SceneMarks popup to continue.", "error");
+          showToast("Something went wrong. Try the SceneMarks popup.", "error");
         } finally {
           button.disabled = false;
+          // A mouse click must not leave focus here, or the next Space to
+          // pause the video would press this button again.
+          if (event.detail > 0) button.blur();
         }
       });
       body.append(button);
@@ -114,7 +128,7 @@
 
     addButton("Quick Save", actions.quickSave);
     addButton("Mark range start/end", actions.toggleRange);
-    addButton("Open Library", actions.openLibrary);
+    addButton("Open Library", actions.openLibrary, "Opening the Library");
 
     header.addEventListener("pointerdown", (event) => {
       if (!event.isTrusted) return;

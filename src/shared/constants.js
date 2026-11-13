@@ -46,7 +46,6 @@
     enableGenericSites: true,
     enablePageHotkeys: true,
     defaultJumpBehavior: "preserve-play-state",
-    quickSaveRequiresNote: false,
     duplicateThresholdSeconds: 3,
     // Voice commands. micDeviceId "" follows the system default input
     // (macOS switches it to plugged-in headphones); otherwise it pins one

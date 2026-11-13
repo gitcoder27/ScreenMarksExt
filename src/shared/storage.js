@@ -444,11 +444,13 @@
     // gets one storage.onChanged instead of two.
     let outcome = null;
     let invalidScene = false;
+    let openDraft = null;
     const state = await updateState((draftState) => {
       const draft = draftState.activeRangeDraft;
       if (!draft || draft.videoKey !== normalizedIdentity.videoKey) {
         return SKIP_WRITE;
       }
+      openDraft = draft;
 
       const scene = createScene({
         type: "range",
@@ -482,10 +484,28 @@
     }
 
     if (!outcome) {
-      return { ok: false, error: "No range start is active for this video." };
+      return { ok: false, noRange: true, error: "No range start is active for this video." };
     }
 
-    return insertSceneResult(outcome, state, normalizedIdentity.videoKey);
+    const result = insertSceneResult(outcome, state, normalizedIdentity.videoKey);
+    // A rejected duplicate leaves the range open; say from where.
+    return result.duplicate ? { ...result, draft: openDraft } : result;
+  }
+
+  // Drops the open range when it belongs to videoKey; a range open on
+  // another video is left alone.
+  async function cancelRange(videoKey) {
+    let cancelled = false;
+    await updateState((state) => {
+      if (!state.activeRangeDraft || state.activeRangeDraft.videoKey !== videoKey) {
+        return SKIP_WRITE;
+      }
+      state.activeRangeDraft = null;
+      cancelled = true;
+      return state;
+    }, SHARED_ONLY);
+
+    return cancelled ? { ok: true } : { ok: false, error: "No range is open on this video." };
   }
 
   async function deleteScene(videoKey, sceneId) {
@@ -956,6 +976,7 @@
     "saveScene",
     "startRange",
     "endRange",
+    "cancelRange",
     "deleteScene",
     "updateScene",
     "updateVideo",
@@ -1015,6 +1036,7 @@
 
   SceneMarks.Storage = {
     SKIP_WRITE,
+    cancelRange,
     clearAllData,
     clearPendingJump,
     addVoiceSample,

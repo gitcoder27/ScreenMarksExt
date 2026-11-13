@@ -63,7 +63,6 @@
       "disabledSiteInput",
       "addDisabledSiteButton",
       "enableFloatingButton",
-      "quickSaveRequiresNote",
       "duplicateThresholdSeconds",
       "defaultJumpBehavior",
       "enableGenericSites",
@@ -259,7 +258,7 @@
   }
 
   const SETTING_FIELDS = {
-    enableFloatingButton: "checked", quickSaveRequiresNote: "checked",
+    enableFloatingButton: "checked",
     duplicateThresholdSeconds: "value", defaultJumpBehavior: "value",
     enableGenericSites: "checked", enablePageHotkeys: "checked"
   };

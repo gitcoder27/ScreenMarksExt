@@ -86,6 +86,18 @@ test("popup range start overwrite retains the action's identity and timestamp", 
   assert.equal(work.captures[1].payload.overwrite, true);
 });
 
+test("popup offers Cancel range only while this video has an open range, and cancels through the worker", async () => {
+  const idle = await loadPopup();
+  assert.equal(idle.get("cancelRangeButton").hidden, true);
+
+  const work = await loadPopup({ range: true });
+  assert.equal(work.get("cancelRangeButton").hidden, false);
+  await work.get("cancelRangeButton").emit("click");
+  const rpc = work.messages.filter((message) => message.type === "SCENEMARKS_STORAGE_RPC").at(-1);
+  assert.equal(rpc.payload.method, "cancelRange");
+  assert.deepEqual([...rpc.payload.args], ["youtube:abcdEFGH123"]);
+});
+
 async function loadOptions() {
   const work = createWorkflow();
   const record = new FakeElement("button");
