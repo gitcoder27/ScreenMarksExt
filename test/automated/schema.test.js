@@ -323,6 +323,28 @@ test("normalizeSettings fills backup defaults and accepts only the offered inter
   assert.deepEqual(Schema.normalizeSettings({ backup: { enabled: "yes", intervalHours: 5 } }).backup, { enabled: false, intervalHours: 24 });
 });
 
+test("normalizeSettings keeps overlay positions for valid platforms only, clamped to 0-1", () => {
+  assert.deepEqual(Schema.normalizeSettings({}).overlay, { collapsed: false, positions: {} });
+  const overlay = Schema.normalizeSettings({
+    overlay: {
+      collapsed: true,
+      positions: {
+        youtube: { x: 1.7, y: -2 },
+        netflix: { x: 0.25, y: 0.5, extra: "dropped" },
+        "www.youtube.com": { x: 0.5, y: 0.5 },
+        __proto__: { x: 0.5, y: 0.5 },
+        prime: { x: "0.3", y: null },
+        hotstar: { x: Number.NaN, y: 0.2 },
+        generic: "top"
+      }
+    }
+  }).overlay;
+  assert.equal(overlay.collapsed, true);
+  assert.deepEqual(overlay.positions, { netflix: { x: 0.25, y: 0.5 }, youtube: { x: 1, y: 0 }, prime: { x: 0.3, y: 0 } });
+  assert.equal(Schema.normalizeSettings({ overlay: { collapsed: "yes", positions: [] } }).overlay.collapsed, false);
+  assert.deepEqual(Schema.normalizeSettings({ overlay: { positions: [{ x: 1, y: 1 }] } }).overlay.positions, {});
+});
+
 test("normalizeBackupStatus keeps a small fixed shape", () => {
   const { Schema } = SceneMarks;
   assert.deepEqual(Schema.normalizeBackupStatus(undefined), {

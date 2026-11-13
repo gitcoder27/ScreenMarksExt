@@ -328,6 +328,21 @@ test("updateSettings merges backup fields without dropping the others", async ()
   assert.deepEqual(store.readState().settings.backup, { enabled: true, intervalHours: 72 });
 });
 
+test("updateSettings merges overlay fields and positions per platform", async () => {
+  await Storage.updateSettings({ overlay: { positions: { youtube: { x: 0.2, y: 0.1 } } } });
+  await Storage.updateSettings({ overlay: { collapsed: true } });
+  const settings = await Storage.updateSettings({ overlay: { positions: { netflix: { x: 1, y: 0 } } } });
+  assert.deepEqual(settings.overlay, {
+    collapsed: true,
+    positions: { netflix: { x: 1, y: 0 }, youtube: { x: 0.2, y: 0.1 } }
+  });
+  assert.deepEqual(store.readState().settings.overlay, settings.overlay);
+  const writes = store.writes;
+  await Storage.updateSettings({ overlay: { positions: { youtube: { x: 0.2, y: 0.1 } } } });
+  assert.equal(store.writes, writes, "an unchanged position writes nothing");
+  await Storage.updateSettings({ overlay: { collapsed: false } });
+});
+
 test("updateSettings merges voice fields without dropping the others", async () => {
   await Storage.updateSettings({ voice: { enabled: true, sensitivity: 0.8 } });
   const settings = await Storage.updateSettings({ voice: { micDeviceId: "abc", micLabel: "MacBook Pro Microphone" } });

@@ -83,6 +83,15 @@
       enabled: false,
       intervalHours: 24
     }),
+    // The page overlay. collapsed: shown as a small pill. positions: where
+    // the panel was dragged, one entry per platform (only the valid
+    // platform ids, never a hostname), as x and y fractions (0-1) of the
+    // free space left and above the panel; no entry means the default top
+    // right spot. Written only when a drag ends or the pill is toggled.
+    overlay: Object.freeze({
+      collapsed: false,
+      positions: Object.freeze({})
+    }),
     hotkeys: Object.freeze({
       quickSave: "Alt+Shift+S",
       saveFavorite: "Alt+Shift+F",

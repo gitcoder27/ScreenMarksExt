@@ -1001,9 +1001,35 @@
     });
   }
 
+  // The platform this page belongs to, from its URL alone, so the panel
+  // finds its position before any video is detected. Positions are keyed
+  // only by these fixed platform ids, never by hostname.
+  function overlayPlatform() {
+    try {
+      const adapter = SceneMarks.Adapters.getAdapter(new URL(root.location.href));
+      return (adapter && adapter.id) || "generic";
+    } catch (_error) {
+      return "generic";
+    }
+  }
+
+  function overlayLayout() {
+    const overlaySettings = getSettingsSync().overlay || {};
+    const positions = overlaySettings.positions || {};
+    return { collapsed: overlaySettings.collapsed === true, position: positions[overlayPlatform()] || null };
+  }
+
   function syncOverlayVisibility() {
     if (!overlay) return;
-    overlay.setEnabled(shouldShowOverlay());
+    const visible = shouldShowOverlay();
+    overlay.setLayout(overlayLayout());
+    if (!visible && overlayMarksKey !== null) {
+      // A hidden panel holds no times and follows no storage changes; the
+      // next show reads the current video again.
+      overlayMarksKey = null;
+      overlayMarksSeq += 1;
+    }
+    overlay.setEnabled(visible);
     syncOverlayMarks();
   }
 
@@ -1114,7 +1140,14 @@
       openLibrary: guard(() => isActiveHere() ? openLibrary() : INACTIVE_RESPONSE),
       jumpToMark: guard((seconds) => isActiveHere()
         ? seekTo({ seconds, expectedVideoKey: overlayMarksKey })
-        : INACTIVE_RESPONSE)
+        : INACTIVE_RESPONSE),
+      // The two layout writes, made only on a drag end and a pill click.
+      // Entering fullscreen, fading or applying another tab's change
+      // writes nothing.
+      savePosition: guard((position) => Storage.updateSettings({
+        overlay: { positions: { [overlayPlatform()]: position } }
+      })),
+      setCollapsed: guard((value) => Storage.updateSettings({ overlay: { collapsed: Boolean(value) } }))
     });
     syncOverlayVisibility();
   }

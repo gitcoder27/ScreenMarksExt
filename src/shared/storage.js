@@ -696,6 +696,16 @@
           ...draftState.settings.backup,
           ...(updates && updates.backup ? updates.backup : {})
         },
+        // Per field, and per platform inside positions, so a drag in one
+        // tab cannot undo another platform's position or the pill state.
+        overlay: {
+          ...draftState.settings.overlay,
+          ...(updates && updates.overlay ? updates.overlay : {}),
+          positions: {
+            ...draftState.settings.overlay.positions,
+            ...(updates && updates.overlay && updates.overlay.positions ? updates.overlay.positions : {})
+          }
+        },
         hotkeys: {
           ...draftState.settings.hotkeys,
           ...(updates && updates.hotkeys ? updates.hotkeys : {})

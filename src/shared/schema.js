@@ -247,6 +247,31 @@
     };
   }
 
+  function clampFraction(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return null;
+    return Math.round(Math.min(1, Math.max(0, number)) * 10000) / 10000;
+  }
+
+  // positions keeps only the valid platforms, in their fixed order, so the
+  // normalized value compares equal however the input was ordered.
+  function normalizeOverlaySettings(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const sourcePositions = source.positions && typeof source.positions === "object" && !Array.isArray(source.positions)
+      ? source.positions
+      : {};
+    const positions = {};
+    for (const platform of VALID_PLATFORMS) {
+      if (!Object.prototype.hasOwnProperty.call(sourcePositions, platform)) continue;
+      const position = sourcePositions[platform];
+      if (!position || typeof position !== "object") continue;
+      const x = clampFraction(position.x);
+      const y = clampFraction(position.y);
+      if (x !== null && y !== null) positions[platform] = { x, y };
+    }
+    return { collapsed: source.collapsed === true, positions };
+  }
+
   // The backupStatus key: the last successful backup (time, slot 1 or 2,
   // the library fingerprint it saved) and the last error, if any. Fixed
   // size; slot 0 means no backup yet.
@@ -290,6 +315,7 @@
           : DEFAULT_SETTINGS.duplicateThresholdSeconds,
       voice: normalizeVoiceSettings(source.voice),
       backup: normalizeBackupSettings(source.backup),
+      overlay: normalizeOverlaySettings(source.overlay),
       hotkeys: normalizeHotkeys(source.hotkeys)
     };
   }
@@ -477,6 +503,7 @@
     isEnabledForHost,
     mainDomainForHost,
     normalizeBackupSettings,
+    normalizeOverlaySettings,
     normalizeBackupStatus,
     normalizeDraft,
     normalizeIdentity,

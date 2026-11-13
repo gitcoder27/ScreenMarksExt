@@ -610,3 +610,110 @@ test("a play-queue step in place toasts its position, and a landed queue jump sh
   assert.equal(bad.ok, false);
   assert.equal(toastText(work), "Scene 3 of 10");
 });
+
+function overlayParts(work) {
+  const host = work.document.body.children[0];
+  const header = host.children[0];
+  const byClass = (name) => header.children.find((node) => node.className === name);
+  return {
+    host, header,
+    count: byClass("scenemarks-overlay__count"),
+    collapse: byClass("scenemarks-overlay__icon-button")
+  };
+}
+
+test("a hidden overlay holds an empty list and follows no changes until shown", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  assert.deepEqual(markTexts(work), ["00:10 -> 00:25", "02:10"]);
+  assert.equal(overlayParts(work).count.textContent, "2");
+  await work.context.SceneMarks.Storage.updateSettings({ enableFloatingButton: false });
+  await flush();
+  assert.equal(overlayParts(work).host.hidden, true);
+  assert.deepEqual(markTexts(work), []);
+  assert.equal(overlayMarks(work).status.textContent, "");
+  assert.equal(overlayParts(work).count.textContent, "");
+  assert.doesNotMatch(pageText(work), /00:10|02:10/);
+
+  // A save while hidden does not reach the page.
+  const updated = savedVideo(SNAPSHOT.videoKey, [{ id: "new", startSeconds: 60 }]);
+  for (const listener of work.changed) listener({ [`video:${SNAPSHOT.videoKey}`]: { newValue: updated } }, "local");
+  assert.doesNotMatch(pageText(work), /01:00/);
+
+  // Shown again, it reads the stored video afresh.
+  await work.context.SceneMarks.Storage.updateSettings({ enableFloatingButton: true });
+  await flush();
+  assert.deepEqual(markTexts(work), ["00:10 -> 00:25", "02:10"]);
+});
+
+test("the pill shows only the count, writes once per trusted click, and applies other tabs' changes without writing", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  const { host, collapse, count } = overlayParts(work);
+  const writes = work.store.writes;
+  await collapse.emit("click", { isTrusted: false, detail: 1 });
+  assert.equal(host.className, "scenemarks-overlay");
+  assert.equal(work.store.writes, writes);
+
+  await collapse.emit("click", { isTrusted: true, detail: 1 });
+  await flush();
+  assert.equal(host.className, "scenemarks-overlay is-collapsed");
+  assert.equal(count.textContent, "2");
+  assert.deepEqual(markTexts(work), [], "a collapsed pill keeps no times in the page");
+  assert.equal(work.store.writes, writes + 1);
+  assert.equal(work.store.readState().settings.overlay.collapsed, true);
+
+  // Another tab expands it: applied here, with no write back.
+  const settings = work.store.readState().settings;
+  const expanded = { ...settings, overlay: { ...settings.overlay, collapsed: false } };
+  for (const listener of work.changed) listener({ settings: { newValue: expanded } }, "local");
+  await flush();
+  assert.equal(host.className, "scenemarks-overlay");
+  assert.deepEqual(markTexts(work), ["00:10 -> 00:25", "02:10"]);
+  assert.equal(work.store.writes, writes + 1);
+});
+
+test("dragging writes this platform's position once, on drag end, and other tabs apply it without writing", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  const { host, header } = overlayParts(work);
+  Object.assign(host, { offsetLeft: 864, offsetTop: 72, offsetWidth: 320, offsetHeight: 300 });
+  header.offsetHeight = 40;
+  const writes = work.store.writes;
+  const pointer = (clientX, clientY, extra = {}) => ({ isTrusted: true, button: 0, pointerId: 1, clientX, clientY, ...extra });
+
+  await header.emit("pointerdown", pointer(900, 80, { isTrusted: false }));
+  await header.emit("pointermove", pointer(500, 300));
+  await header.emit("pointerup", pointer(500, 300));
+  assert.equal(host.style.left, "", "an untrusted press starts no drag");
+
+  await header.emit("pointerdown", pointer(900, 80));
+  await header.emit("pointermove", pointer(700, 200));
+  await header.emit("pointermove", pointer(500, 300));
+  assert.equal(work.store.writes, writes, "nothing is written while dragging");
+  assert.equal(host.style.left, "464px");
+  assert.equal(host.style.top, "292px");
+  Object.assign(host, { offsetLeft: 464, offsetTop: 292 });
+  await header.emit("pointerup", pointer(500, 300));
+  await header.emit("lostpointercapture", pointer(500, 300));
+  await flush();
+  assert.equal(work.store.writes, writes + 1);
+  const saved = work.store.readState().settings.overlay.positions;
+  assert.deepEqual(Object.keys(saved), ["generic"]);
+  assert.equal(saved.generic.x, Math.round(((464 - 8) / (1200 - 320 - 16)) * 10000) / 10000);
+  assert.equal(saved.generic.y, Math.round(((292 - 8) / (800 - 40 - 16)) * 10000) / 10000);
+
+  // A click on the header without movement writes nothing.
+  await header.emit("pointerdown", pointer(500, 300));
+  await header.emit("pointerup", pointer(501, 300));
+  await flush();
+  assert.equal(work.store.writes, writes + 1);
+
+  // A change from another tab moves the panel here without a write.
+  const settings = work.store.readState().settings;
+  const moved = { ...settings, overlay: { ...settings.overlay, positions: { generic: { x: 1, y: 0 }, youtube: { x: 0, y: 1 } } } };
+  for (const listener of work.changed) listener({ settings: { newValue: moved } }, "local");
+  assert.equal(host.style.left, `${8 + 864}px`);
+  assert.equal(host.style.top, "8px");
+  assert.equal(work.store.writes, writes + 1);
+});
