@@ -15,17 +15,16 @@
           <h1>SceneMarks</h1>
           <p id="platformLabel">Checking page...</p>
         </div>
-        <button id="refreshButton" class="icon-button" type="button" title="Retry detection" aria-label="Retry detection">R</button>
+        <button id="refreshButton" class="retry-button" type="button" title="Look for the video again">Retry</button>
       </header>
 
-      <section class="site-controls" aria-label="Where SceneMarks runs">
-        <div id="siteRow" class="site-controls__row" hidden>
-          <p><span id="siteStateLabel">On for</span> <strong id="siteDomainLabel"></strong></p>
-          <button id="siteToggleButton" type="button">Turn off here</button>
-        </div>
+      <section class="site-controls site-controls--compact" aria-label="Where SceneMarks runs">
         <div class="site-controls__row">
-          <p id="pauseStateLabel">Active on all other sites</p>
-          <button id="pauseAllButton" type="button">Pause everywhere</button>
+          <p><span id="siteStateLabel">On for</span> <strong id="siteDomainLabel"></strong></p>
+          <div class="site-controls__buttons">
+            <button id="siteToggleButton" type="button" hidden>Turn off here</button>
+            <button id="pauseAllButton" type="button">Pause all</button>
+          </div>
         </div>
       </section>
 
@@ -39,28 +38,23 @@
 
       <section id="statusBox" class="status-box" role="status"></section>
 
-      <section id="videoPanel" class="video-panel" hidden>
-        <dl class="meta-grid">
-          <div>
-            <dt>Current</dt>
-            <dd id="currentTimeLabel">--:--</dd>
-          </div>
-          <div>
-            <dt>Duration</dt>
-            <dd id="durationLabel">--:--</dd>
-          </div>
-        </dl>
+      <section id="videoRow" class="video-row" hidden>
+        <button id="videoFavoriteButton" class="favorite-toggle" type="button" hidden>&#9734;</button>
+        <p id="videoTitleLabel" class="video-title"></p>
+      </section>
 
+      <section id="videoPanel" class="video-panel" hidden>
+        <p class="video-clock"><span id="currentTimeLabel">--:--</span> <span class="video-clock__of">/ <span id="durationLabel">--:--</span></span></p>
         <div class="primary-actions">
           <button id="saveMomentButton" type="button">Save Moment</button>
-          <button id="rangeButton" type="button">Mark Scene Start</button>
+          <button id="rangeButton" type="button">Mark Start</button>
           <button id="cancelRangeButton" class="secondary-action" type="button" hidden>Cancel range</button>
         </div>
       </section>
 
       <section class="scenes-section">
         <div class="section-heading">
-          <h2>Saved Scenes</h2>
+          <h2>Saved times</h2>
           <span id="sceneCountLabel">0</span>
         </div>
         <div id="sceneList" class="scene-list"></div>
@@ -70,7 +64,6 @@
         <button id="toggleOverlayButton" type="button">Overlay</button>
         <button id="openLibraryButton" type="button">Library</button>
         <button id="openOptionsButton" type="button">Settings</button>
-        <button id="hotkeysButton" type="button">Hotkeys</button>
       </footer>
     </main>
 

@@ -310,3 +310,8 @@ test("normalizeHotkeys fills the lineup hotkeys from defaults and keeps custom o
   const values = Object.values(defaults);
   assert.equal(new Set(values).size, values.length, "every default hotkey is distinct");
 });
+
+test("normalizeHotkeys fills saveFavorite from its default", () => {
+  assert.equal(Schema.normalizeSettings({ hotkeys: { quickSave: "Q" } }).hotkeys.saveFavorite, "Alt+Shift+F");
+  assert.equal(Schema.normalizeSettings({ hotkeys: { saveFavorite: "F" } }).hotkeys.saveFavorite, "F");
+});

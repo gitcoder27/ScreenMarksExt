@@ -379,10 +379,39 @@
     }
 
     let outcome = null;
+    let favorited = null;
     const state = await updateState((draftState) => {
       outcome = insertScene(draftState, normalizedIdentity, scene, opts.allowDuplicate);
-      return outcome.savedScene ? draftState : SKIP_WRITE;
+      if (outcome.savedScene) {
+        return draftState;
+      }
+      // favoriteDuplicate: a save that lands on an existing mark favorites
+      // that mark instead, decided inside the same queued write.
+      const existing = outcome.duplicateScene;
+      if (!opts.favoriteDuplicate || !existing) {
+        return SKIP_WRITE;
+      }
+      if (existing.favorite) {
+        favorited = { scene: existing, alreadyFavorite: true };
+        return SKIP_WRITE;
+      }
+      const now = new Date().toISOString();
+      const updated = { ...existing, favorite: true, updatedAt: now };
+      outcome.video.scenes = outcome.video.scenes.map((item) => (item.id === existing.id ? updated : item));
+      outcome.video.updatedAt = now;
+      favorited = { scene: updated, alreadyFavorite: false };
+      return draftState;
     }, videoScope(normalizedIdentity.videoKey));
+
+    if (favorited) {
+      return {
+        ok: true,
+        existing: true,
+        alreadyFavorite: favorited.alreadyFavorite,
+        scene: favorited.scene,
+        video: state.videos[normalizedIdentity.videoKey] || outcome.video
+      };
+    }
 
     return insertSceneResult(outcome, state, normalizedIdentity.videoKey);
   }

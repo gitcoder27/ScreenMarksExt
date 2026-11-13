@@ -416,6 +416,31 @@
     return withFeedback("save", result, seconds);
   }
 
+  // Saves the current moment as a favorite. When a saved time already sits
+  // inside the duplicate window, that one is favorited instead (decided in
+  // the worker's write, so it cannot race another save). The toast names
+  // the time of the mark that was favorited.
+  async function saveFavorite() {
+    const detected = requireDetectedVideo();
+    if (!detected.ok) {
+      return withFeedback("favorite", detected, 0);
+    }
+
+    const result = await Storage.saveScene(
+      detected.snapshot,
+      { type: "timestamp", startSeconds: detected.snapshot.currentTimeSeconds, endSeconds: null, favorite: true },
+      { favoriteDuplicate: true }
+    );
+    if (result.ok) {
+      syncOverlayVisibility();
+    }
+
+    const markSeconds = result.ok && result.scene && Number.isFinite(result.scene.startSeconds)
+      ? result.scene.startSeconds
+      : snapshotSeconds(detected);
+    return withFeedback("favorite", result, markSeconds);
+  }
+
   async function startRange(payload) {
     const detected = requireDetectedVideo(payload);
     if (!detected.ok) {
@@ -880,6 +905,8 @@
 
       if (shortcutMatches(event, hotkeys.quickSave)) {
         action = () => saveTimestamp({ quick: true });
+      } else if (shortcutMatches(event, hotkeys.saveFavorite)) {
+        action = saveFavorite;
       } else if (shortcutMatches(event, hotkeys.toggleRange)) {
         action = () => toggleRange({ quick: true });
       } else if (shortcutMatches(event, hotkeys.startRange)) {

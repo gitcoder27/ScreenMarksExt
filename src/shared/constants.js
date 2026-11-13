@@ -65,6 +65,7 @@
     }),
     hotkeys: Object.freeze({
       quickSave: "Alt+Shift+S",
+      saveFavorite: "Alt+Shift+F",
       toggleRange: "Alt+Shift+M",
       startRange: "Alt+Shift+A",
       endRange: "Alt+Shift+D",

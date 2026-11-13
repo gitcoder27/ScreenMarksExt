@@ -17,7 +17,7 @@ It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#da
 - Browser command shortcuts for quick save, range toggle, and library.
 - Netflix, Prime Video, Hotstar/JioHotstar, and YouTube identity adapters. (Saves made on YouTube before the adapter existed are migrated from the old generic key when the extension is installed, updated, enabled or reloaded, when the browser starts, and after an import.)
 - Library page with search, filters, favorites, edit/delete, copy share text, export, import, a Random pick button, and a batch Open Random that opens a chosen number of random videos in new tabs.
-- Favorites at both levels: star entire videos in the Library or individual timestamps in the Library and popup. The Library favorites filter includes any video that is favorited itself or has a favorited timestamp.
+- Favorites at both levels: star entire videos or individual timestamps in the Library and popup, or press `Alt+Shift+F` to save the current moment as a favorite. The Library favorites filter includes any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video at its first saved timestamp, skipping videos already open in tabs of the current window.
 - A lineup of the videos the Library's batch **Open Random** opened: each starts at its first saved timestamp the first time you look at it, and `Alt+Shift+K` / `Alt+Shift+J` step to the next or previous one.
 - Hands-free [voice commands](#voice-commands) (next, back, pause, play, mark, skip, return, random), recognized locally against your own recorded words, with no AI model and no network.
@@ -39,13 +39,13 @@ The same flow works in Chrome at `chrome://extensions`.
 1. Open a supported video page.
 2. Start playback so the page creates the active `<video>` element.
 3. Open SceneMarks.
-4. Click **Save Moment** to save the current timestamp with optional notes/tags.
-5. Click **Mark Scene Start**, continue playback, then click **Mark End** to save a range. **Cancel range** drops a range you no longer want.
-6. Click **Jump** beside any saved scene to seek back to it.
+4. Click **Save Moment** to save the current timestamp at once. To add a note or tags, open the row's **⋯** menu and choose **Edit**.
+5. Click **Mark Start**, continue playback, then click **Mark End** to save a range. **Cancel range** drops a range you no longer want.
+6. Click a saved time to seek back to it. Each saved time is one line: the time (with a note snippet when it has a note), a star, and a **⋯** menu with **Edit** and **Delete**. When the popup opens, the list is scrolled to the time nearest the playback position, which is outlined. Star the video itself with the star beside its title.
 7. Use **Overlay On/Off** in the popup to show or hide the draggable page overlay.
 8. Use the overlay **Open Library** button to open saved videos in a private extension page.
 9. Open the full **Library** page to search, expand/collapse video groups, export/import JSON, favorite videos and scenes, or open source pages. Use the **Random** button (or press `R` on the library page) to pick a random video that is not already open in a tab of the current window; its card stays outlined and labelled **Random pick** until the next pick. When every matching video is already open, SceneMarks says so instead of re-picking one. To open several at once, set the count next to **Open Random** and click it (or press `Enter` in the count field): that many distinct videos are sampled uniformly at random from the filtered, not-already-open pool and opened in background tabs — asking for more than are available opens all of them. Those tabs become the [lineup](#the-lineup): each one starts at its first saved timestamp the first time you switch to it.
-10. Star a video in the Library or a timestamp in the Library/popup to include it in the Library favorites filter.
+10. Star a video or a timestamp in the Library or popup to include it in the Library favorites filter.
 
 ## Overlay Panel
 
@@ -72,6 +72,7 @@ Default browser command shortcuts:
 Default page hotkeys:
 
 - `Alt+Shift+S`: quick save current timestamp.
+- `Alt+Shift+F`: save the current timestamp as a favorite. If a saved timestamp is already within the duplicate window, that one is favorited instead; the toast names its time, e.g. `Favorited 04:12`.
 - `Alt+Shift+M`: mark range start/end (toggle).
 - `Alt+Shift+A`: mark range start only.
 - `Alt+Shift+D`: mark range end only.
@@ -216,12 +217,14 @@ Do this first on a normal HTML5 video before trying streaming sites:
 5. Start playback.
 6. Open SceneMarks and confirm:
    - Video is detected.
-   - **Save Moment** stores a timestamp.
-   - **Mark Scene Start** then **Mark End** stores a range.
+   - **Save Moment** stores a timestamp at once, with no dialog.
+   - **Mark Start** then **Mark End** stores a range.
    - Saved rows appear in the popup.
-   - **Jump** seeks to the saved timestamp.
-   - **Edit** and **Delete** work.
-   - The star beside a saved scene in the popup toggles its favorite state.
+   - Clicking a saved time seeks to it.
+   - **Edit** and **Delete** in a row's **⋯** menu work.
+   - The star beside a saved scene in the popup toggles its favorite state, and the star beside the title favorites the video.
+   - With 50 saved times, at least 8 rows are visible without scrolling the popup itself, and the time nearest the playback position is outlined.
+   - `Alt+Shift+F` on a new moment shows `Favorited` with that time; on a saved time it favorites that one.
 7. Open Library and confirm search plus export/import, and that a save in another tab shows up without reloading the library page.
 8. Favorite a video from its card header (works while collapsed) and a timestamp from its row, then check **Favorites only**: both videos appear — the favorited video with all its scenes, the other with only the favorited timestamp.
 9. Use overlay **Quick Save**, **Mark range start/end** and **Open Library**. Confirm the overlay lists every saved time of the current video, updates when you save or delete one, and jumps when clicked, while notes and titles appear only in the popup/Library. Try popup capture while playback continues, customized single-key/numpad shortcuts, and independent Settings changes from two extension pages.

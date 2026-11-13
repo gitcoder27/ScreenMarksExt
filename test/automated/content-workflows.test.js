@@ -573,3 +573,22 @@ test("the Random hotkey asks the worker to open a video at its first mark", asyn
   assert.equal(work.messages.at(-1).type, "SCENEMARKS_OPEN_RANDOM_VIDEO");
   assert.equal(toastText(work), "Opening a random video at its first mark");
 });
+
+test("the favorite hotkey saves a favorite, or favorites the saved time already there, and toasts only the time", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  await work.events.emit("keydown", keyboard("KeyF"));
+  assert.equal(toastText(work), "Favorited 01:00");
+  const scenes = () => work.store.readState().videos[SNAPSHOT.videoKey].scenes;
+  assert.equal(scenes().find((scene) => scene.startSeconds === 60).favorite, true);
+
+  // 02:11 is inside the window of the saved 02:10: that one is favorited.
+  work.setSnapshot({ currentTimeSeconds: 131 });
+  await work.events.emit("keydown", keyboard("KeyF"));
+  assert.equal(toastText(work), "Favorited 02:10");
+  assert.equal(scenes().find((scene) => scene.id === "late").favorite, true);
+  assert.equal(scenes().length, 3);
+  await work.events.emit("keydown", keyboard("KeyF"));
+  assert.equal(toastText(work), "Already a favorite: 02:10");
+  assert.doesNotMatch(pageText(work), /confidential/);
+});

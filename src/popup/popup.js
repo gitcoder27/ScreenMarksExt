@@ -14,6 +14,15 @@
   // auto-disarm timer.
   let armedDelete = null;
   let armedDeleteTimer = null;
+  // The row whose Edit / Delete menu is open, kept across re-renders.
+  let openMenuSceneId = null;
+  // The list is scrolled to the mark nearest the playback time once, when
+  // the popup opens; later refreshes keep the scroll where the user left it.
+  let scrolledToNearest = false;
+
+  const PLATFORM_NAMES = Object.freeze({
+    netflix: "Netflix", prime: "Prime Video", hotstar: "Hotstar", youtube: "YouTube"
+  });
 
   function byId(id) {
     return document.getElementById(id);
@@ -81,6 +90,28 @@
     button.setAttribute("aria-pressed", String(Boolean(isFavorite)));
     button.addEventListener("click", onClick);
     return button;
+  }
+
+  function createMoreButton(sceneId) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "scene-more";
+    button.textContent = "\u22ef";
+    button.title = "Edit or delete";
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-expanded", String(openMenuSceneId === sceneId));
+    button.addEventListener("click", () => toggleSceneMenu(sceneId));
+    return button;
+  }
+
+  function toggleSceneMenu(sceneId) {
+    openMenuSceneId = openMenuSceneId === sceneId ? null : sceneId;
+    elements.sceneList.querySelectorAll("[data-scene-id]").forEach((row) => {
+      const open = row.dataset.sceneId === openMenuSceneId;
+      row.classList.toggle("is-menu-open", open);
+      const more = row.querySelector(".scene-more");
+      if (more) more.setAttribute("aria-expanded", String(open));
+    });
   }
 
   function createDeleteButton(videoKey, scene) {
@@ -167,14 +198,25 @@
     return !latestSettings || isEnabledForHost(latestSettings, activeHostname || "");
   }
 
+  // One compact row: where SceneMarks runs, the site switch and the
+  // pause-everywhere switch.
   function renderSiteControls() {
     const disabledSite = getDisabledSite();
     const paused = isPausedEverywhere();
 
-    elements.siteRow.hidden = !activeHostname;
-    if (activeHostname) {
-      elements.siteStateLabel.textContent = disabledSite ? "Off on" : "On for";
+    if (paused) {
+      elements.siteStateLabel.textContent = "Paused on every site";
+      elements.siteDomainLabel.textContent = "";
+    } else if (activeHostname) {
+      elements.siteStateLabel.textContent = disabledSite ? "Off on " : "On for ";
       elements.siteDomainLabel.textContent = disabledSite || mainDomainForHost(activeHostname) || activeHostname;
+    } else {
+      elements.siteStateLabel.textContent = "On for every site";
+      elements.siteDomainLabel.textContent = "";
+    }
+
+    elements.siteToggleButton.hidden = !activeHostname || paused;
+    if (activeHostname) {
       elements.siteToggleButton.textContent = disabledSite ? "Turn on here" : "Turn off here";
       elements.siteToggleButton.classList.toggle("is-off", Boolean(disabledSite));
       elements.siteToggleButton.title = disabledSite
@@ -182,8 +224,8 @@
         : "Stop SceneMarks hotkeys, overlay and saving on this site and its subdomains";
     }
 
-    elements.pauseStateLabel.textContent = paused ? "All sites: paused" : "All sites: on";
-    elements.pauseAllButton.textContent = paused ? "Resume" : "Pause everywhere";
+    elements.pauseAllButton.textContent = paused ? "Resume" : "Pause all";
+    elements.pauseAllButton.title = paused ? "Run SceneMarks on websites again" : "Pause SceneMarks on every site";
     elements.pauseAllButton.classList.toggle("is-off", paused);
     elements.pauseAllButton.setAttribute("aria-pressed", String(paused));
   }
@@ -193,9 +235,12 @@
     return `SceneMarks is ${where}: its hotkeys and overlay leave this page alone. Jumps from the library still work.`;
   }
 
+  // Pages SceneMarks cannot run on (browser pages, the store) are not an
+  // error: the message stays neutral.
   function renderUnavailable(message) {
-    elements.platformLabel.textContent = "No video context";
+    elements.platformLabel.textContent = "No video on this page";
     elements.videoPanel.hidden = true;
+    elements.videoRow.hidden = true;
     elements.sceneCountLabel.textContent = "0";
     clearNode(elements.sceneList);
     renderOverlayToggle();
@@ -203,19 +248,40 @@
 
     const empty = document.createElement("p");
     empty.className = "empty-state";
-    empty.textContent = "Open a supported streaming page or click the popup on a page with an HTML5 video.";
+    empty.textContent = "Open a page with a video to save moments.";
     elements.sceneList.append(empty);
-    setStatus(message, true);
+    setStatus(message, false);
+  }
+
+  function platformText(context) {
+    if (!context.detected) {
+      return "No video on this page yet";
+    }
+    const name = PLATFORM_NAMES[context.platform];
+    return name ? `Video on ${name}` : "Video on this page";
+  }
+
+  function renderVideoRow(context, video) {
+    const title = (video && video.title) || context.title || "";
+    elements.videoRow.hidden = !context.detected && !video;
+    elements.videoTitleLabel.textContent = title || "Untitled video";
+    elements.videoTitleLabel.title = title;
+    // A video can be starred once something is saved for it.
+    elements.videoFavoriteButton.hidden = !video;
+    if (video) {
+      elements.videoFavoriteButton.textContent = video.favorite ? "\u2605" : "\u2606";
+      elements.videoFavoriteButton.classList.toggle("is-favorite", Boolean(video.favorite));
+      elements.videoFavoriteButton.title = video.favorite ? "Unfavorite this video" : "Favorite this video";
+      elements.videoFavoriteButton.setAttribute("aria-label", elements.videoFavoriteButton.title);
+      elements.videoFavoriteButton.setAttribute("aria-pressed", String(Boolean(video.favorite)));
+    }
   }
 
   function renderContext(response) {
     const context = response.context;
     const scenes = response.scenes || [];
-    const title = context.title || context.rawUrl || "Current page";
 
-    elements.platformLabel.textContent = context.detected
-      ? `${context.platform} detected`
-      : "No active video detected";
+    elements.platformLabel.textContent = platformText(context);
     // Saving is refused on an inactive site, so its buttons are hidden;
     // the saved scenes stay listed and jumpable, like the library.
     elements.videoPanel.hidden = !context.detected || !isActiveHere();
@@ -230,13 +296,33 @@
     if (!isActiveHere()) {
       setStatus(inactiveMessage(), false);
     } else if (!context.detected) {
-      setStatus("No active video detected. Start playback, wait for the player to load, then retry.", true);
+      setStatus("Start playback, wait for the player to load, then press Retry.", false);
     } else {
-      setStatus(title, false);
+      setStatus("", false);
     }
 
+    renderVideoRow(context, response.video);
     renderRangeButton(response);
     renderScenes(context, scenes);
+  }
+
+  async function toggleVideoFavorite() {
+    const video = latestContext && latestContext.video;
+    if (!video) return;
+    let response = null;
+    try {
+      response = await Storage.updateVideo(video.videoKey, { favorite: !video.favorite });
+    } catch (error) {
+      setStatus(storageErrorMessage(error), true);
+      return;
+    }
+
+    if (!response || !response.ok) {
+      setStatus((response && response.error) || "Could not update favorite.", true);
+      return;
+    }
+
+    await refreshContext();
   }
 
   function renderOverlayToggle() {
@@ -255,7 +341,10 @@
 
     elements.rangeButton.textContent = isCurrentDraft
       ? `Mark End (${formatSeconds(draft.startSeconds)})`
-      : "Mark Scene Start";
+      : "Mark Start";
+    elements.rangeButton.title = isCurrentDraft
+      ? "Save the range that started at this time"
+      : "Start a scene range at the current time";
     elements.cancelRangeButton.hidden = !isCurrentDraft;
   }
 
@@ -275,6 +364,21 @@
     setStatus(cancelled ? "Range cancelled." : "No range is open on this video.", !cancelled);
   }
 
+  // The saved time closest to the playback position, or -1.
+  function nearestSceneIndex(scenes, seconds) {
+    if (!Number.isFinite(seconds)) return -1;
+    let best = -1;
+    scenes.forEach((scene, index) => {
+      if (best === -1 || Math.abs(scene.startSeconds - seconds) < Math.abs(scenes[best].startSeconds - seconds)) {
+        best = index;
+      }
+    });
+    return best;
+  }
+
+  // One line per saved time: the time (and a note snippet only when there
+  // is a note), the star, and a menu holding Edit and Delete. Clicking the
+  // row jumps.
   function renderScenes(context, scenes) {
     clearNode(elements.sceneList);
 
@@ -282,52 +386,68 @@
       const empty = document.createElement("p");
       empty.className = "empty-state";
       empty.textContent = context.detected
-        ? "No scenes saved for this video yet."
-        : "Saved scenes appear here after a video is detected.";
+        ? "Nothing saved for this video yet."
+        : "Saved times appear here once a video is found.";
       elements.sceneList.append(empty);
       armedDelete = null;
+      openMenuSceneId = null;
       return;
     }
 
-    scenes.forEach((scene) => {
-      const row = document.createElement("article");
-      row.className = "scene-row";
+    if (openMenuSceneId && !scenes.some((scene) => scene.id === openMenuSceneId)) {
+      openMenuSceneId = null;
+    }
+    const nearest = context.detected ? nearestSceneIndex(scenes, context.currentTimeSeconds) : -1;
+    let nearestRow = null;
+
+    scenes.forEach((scene, index) => {
+      const row = document.createElement("div");
+      row.className = ["scene-row", index === nearest ? "is-nearest" : "", scene.id === openMenuSceneId ? "is-menu-open" : ""]
+        .filter(Boolean).join(" ");
       row.dataset.sceneId = scene.id;
 
-      const top = document.createElement("div");
-      top.className = "scene-row__top";
-
+      const jump = document.createElement("button");
+      jump.type = "button";
+      jump.className = "scene-jump";
+      jump.title = `Jump to ${formatSeconds(scene.startSeconds)}`;
       const time = document.createElement("span");
       time.className = "scene-time";
       time.textContent = formatRange(scene.startSeconds, scene.endSeconds);
-
-      const note = document.createElement("p");
-      note.className = "scene-note";
-      note.textContent = scene.note || "No note";
-
-      top.append(time, note);
-      row.append(top);
-
-      if (scene.tags && scene.tags.length) {
-        const tags = document.createElement("p");
-        tags.className = "scene-tags";
-        tags.textContent = scene.tags.map((tag) => `#${tag}`).join(" ");
-        row.append(tags);
+      jump.append(time);
+      if (scene.note) {
+        const note = document.createElement("span");
+        note.className = "scene-note";
+        note.textContent = scene.note;
+        jump.append(note);
       }
+      jump.addEventListener("click", () => jumpToScene(scene));
 
-      const actions = document.createElement("div");
-      actions.className = "scene-actions";
-      actions.append(
-        createButton("Jump", () => jumpToScene(scene)),
-        createFavoriteButton(scene.favorite, () => toggleSceneFavorite(context.videoKey, scene)),
+      const menu = document.createElement("div");
+      menu.className = "scene-menu";
+      menu.append(
         createButton("Edit", () => editScene(context.videoKey, scene)),
         createDeleteButton(context.videoKey, scene)
       );
-      row.append(actions);
+
+      row.append(
+        jump,
+        createFavoriteButton(scene.favorite, () => toggleSceneFavorite(context.videoKey, scene)),
+        createMoreButton(scene.id),
+        menu
+      );
+      // Clicks on the row's padding jump too.
+      row.addEventListener("click", (event) => {
+        if (event.target === row) jumpToScene(scene);
+      });
       elements.sceneList.append(row);
+      if (index === nearest) nearestRow = row;
     });
 
     syncArmedDelete();
+    if (nearestRow && !scrolledToNearest) {
+      scrolledToNearest = true;
+      if (typeof nearestRow.scrollIntoView === "function") nearestRow.scrollIntoView({ block: "center" });
+    }
   }
 
   async function toggleSceneFavorite(videoKey, scene) {
@@ -359,20 +479,11 @@
     };
   }
 
+  // Saves at once; a note or tags can be added later with Edit.
   async function saveMoment() {
     const captured = await captureActionContext();
     if (!captured) return;
-    const value = await openSceneDialog({
-      title: "Save Moment",
-      timeLabel: `Time: ${formatSeconds(captured.capture.seconds)}`,
-      confirmLabel: "Save"
-    });
-
-    if (!value) {
-      return;
-    }
-
-    await saveTimestampValue({ ...value, capture: captured.capture }, false);
+    await saveTimestampValue({ capture: captured.capture }, false);
   }
 
   async function saveTimestampValue(value, allowDuplicate) {
@@ -395,6 +506,7 @@
     }
 
     await refreshContext();
+    setStatus(`Saved ${formatSeconds(value.capture.seconds)}.`, false);
   }
 
   async function handleRangeButton() {
@@ -633,11 +745,9 @@
     [
       "platformLabel",
       "refreshButton",
-      "siteRow",
       "siteStateLabel",
       "siteDomainLabel",
       "siteToggleButton",
-      "pauseStateLabel",
       "pauseAllButton",
       "statusBox",
       "videoPanel",
@@ -651,7 +761,9 @@
       "sceneList",
       "openLibraryButton",
       "openOptionsButton",
-      "hotkeysButton",
+      "videoRow",
+      "videoFavoriteButton",
+      "videoTitleLabel",
       "sceneDialog",
       "sceneForm",
       "dialogTitle",
@@ -675,7 +787,7 @@
     elements.toggleOverlayButton.addEventListener("click", toggleOverlay);
     elements.openLibraryButton.addEventListener("click", () => openExtensionPage("src/library/library.html"));
     elements.openOptionsButton.addEventListener("click", () => chrome.runtime.openOptionsPage());
-    elements.hotkeysButton.addEventListener("click", () => chrome.runtime.openOptionsPage());
+    elements.videoFavoriteButton.addEventListener("click", toggleVideoFavorite);
     elements.cancelDialogButton.addEventListener("click", () => closeSceneDialog(null));
     elements.sceneForm.addEventListener("submit", (event) => {
       event.preventDefault();

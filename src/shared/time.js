@@ -51,6 +51,7 @@
     if (r.videoChanged) return fail("The video changed \u2014 try again");
 
     if (action === "save" || action === "favorite") {
+      if (r.ok && r.alreadyFavorite) return { ok: true, tone: "info", text: `Already a favorite: ${at}` };
       if (r.ok) {
         return { ok: true, tone: "success", text: `${action === "favorite" ? "Favorited" : "Saved"} ${at}` };
       }

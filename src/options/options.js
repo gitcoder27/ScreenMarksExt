@@ -68,6 +68,7 @@
       "enableGenericSites",
       "enablePageHotkeys",
       "quickSaveHotkey",
+      "saveFavoriteHotkey",
       "toggleRangeHotkey",
       "startRangeHotkey",
       "endRangeHotkey",

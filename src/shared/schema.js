@@ -90,6 +90,7 @@
 
     return {
       quickSave: sanitizeText(hotkeys.quickSave || defaults.quickSave, 60),
+      saveFavorite: sanitizeText(hotkeys.saveFavorite || defaults.saveFavorite, 60),
       toggleRange: sanitizeText(hotkeys.toggleRange || defaults.toggleRange, 60),
       startRange: sanitizeText(hotkeys.startRange || defaults.startRange, 60),
       endRange: sanitizeText(hotkeys.endRange || defaults.endRange, 60),

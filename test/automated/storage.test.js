@@ -791,3 +791,28 @@ test("a range end rejected as a duplicate keeps the range open and says from whe
   const none = await Storage.endRange(OTHER_IDENTITY, 30);
   assert.equal(none.noRange, true);
 });
+
+test("favoriteDuplicate saves a new favorite, or favorites the saved time already inside the window", async () => {
+  const fresh = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 100, favorite: true }, { favoriteDuplicate: true });
+  assert.equal(fresh.ok, true);
+  assert.equal(fresh.existing, undefined);
+  assert.equal(fresh.scene.favorite, true);
+
+  await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 200 });
+  const near = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 202, favorite: true }, { favoriteDuplicate: true });
+  assert.equal(near.ok, true);
+  assert.equal(near.existing, true);
+  assert.equal(near.alreadyFavorite, false);
+  assert.equal(near.scene.startSeconds, 200);
+  const scenes = await Storage.getScenesForVideo(IDENTITY.videoKey);
+  assert.deepEqual(scenes.map((scene) => [scene.startSeconds, scene.favorite]), [[100, true], [200, true]]);
+
+  const writes = store.writes;
+  const again = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 199, favorite: true }, { favoriteDuplicate: true });
+  assert.equal(again.alreadyFavorite, true);
+  assert.equal(store.writes, writes, "an already-favorite mark writes nothing");
+
+  // Without the option a duplicate is still just refused.
+  const plain = await Storage.saveScene(IDENTITY, { type: "timestamp", startSeconds: 201 });
+  assert.equal(plain.duplicate, true);
+});
