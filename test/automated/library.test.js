@@ -121,3 +121,90 @@ test("wording: singular counts, platform names and an empty-library message", as
   const empty = await openLibrary({});
   assert.match(descendants(empty.get("libraryList")).map((node) => node.textContent).join(" "), /Your library is empty\. On a video page, press Alt\+Shift\+S/);
 });
+
+const FAVORITES = [
+  video("plain", "Plain video", [scene("p1", 10, "2026-03-01T00:00:00.000Z"), scene("p2", 20, "2026-03-02T00:00:00.000Z", { favorite: true }),
+    scene("p3", 30, "2026-03-03T00:00:00.000Z"), scene("p4", 40, "2026-03-04T00:00:00.000Z", { favorite: true, note: "kitchen" })]),
+  video("starred", "Starred video", [scene("s1", 5, "2026-02-01T00:00:00.000Z"), scene("s2", 6, "2026-02-02T00:00:00.000Z")], { favorite: true }),
+  video("both", "Starred with a moment", [scene("b1", 7, "2026-01-01T00:00:00.000Z", { favorite: true }), scene("b2", 8, "2026-01-02T00:00:00.000Z")], { favorite: true }),
+  video("none", "Nothing starred", [scene("n1", 9, "2026-01-03T00:00:00.000Z")])
+];
+
+test("favorites filter: All, Favorite videos, Favorite moments", () => {
+  const View = loadView();
+  const shown = (filters) => Array.from(View.filterVideos(FAVORITES, filters))
+    .map((item) => `${item.videoKey.slice(8)}:${item.scenes.map((entry) => entry.id).join(",")}`);
+  assert.deepEqual(shown({ favorites: "all" }), ["plain:p1,p2,p3,p4", "starred:s1,s2", "both:b1,b2", "none:n1"]);
+  // Starred videos with every scene; a starred moment in an unstarred video does not count.
+  assert.deepEqual(shown({ favorites: "videos" }), ["starred:s1,s2", "both:b1,b2"]);
+  // Exactly the starred scenes, in any video; a starred video without one is gone.
+  assert.deepEqual(shown({ favorites: "moments" }), ["plain:p2,p4", "both:b1"]);
+  // Combined with search: a note hit narrows, a title hit keeps the favorites rule.
+  assert.deepEqual(shown({ favorites: "moments", query: "KITCHEN" }), ["plain:p4"]);
+  assert.deepEqual(shown({ favorites: "moments", query: "plain" }), ["plain:p2,p4"]);
+  assert.deepEqual(shown({ favorites: "videos", query: "nothing" }), []);
+  assert.deepEqual(shown({ favorites: "all", query: "0:40" }), ["plain:p4"]);
+  assert.deepEqual(shown({ favorites: "bogus", platform: "netflix" }), []);
+});
+
+test("rows show time, saved date, star, Jump and a keyboard menu with Edit and Delete", async () => {
+  const page = await openLibrary(seedOf(FAVORITES));
+  page.get("favoritesFilter").value = "moments";
+  await page.get("favoritesFilter").emit("change");
+  const list = page.get("libraryList");
+  const rows = descendants(list).filter((node) => /^scene-row/.test(node.className));
+  // Favorite moments start expanded: exactly the two starred moments of the unstarred video, then the other.
+  assert.equal(rows.length, 3);
+  const buttons = descendants(rows[0]).filter((node) => node.tagName === "BUTTON");
+  assert.deepEqual(buttons.map((node) => node.textContent), ["★", "Jump", "⋯"]);
+  assert.equal(descendants(rows[0]).find((node) => node.className === "scene-time").textContent, "00:20");
+  assert.match(descendants(rows[0]).find((node) => node.className === "scene-saved").textContent, /2026/);
+  assert.equal(descendants(rows[0]).some((node) => node.className === "scene-note"), false);
+  assert.equal(descendants(rows[1]).find((node) => node.className === "scene-note").textContent, "kitchen");
+  assert.equal(descendants(list).some((node) => ["Open", "Copy Text", "Edit", "Delete"].includes(node.textContent)
+    && node.parentNode && node.parentNode.className === "scene-actions"), false);
+
+  const menu = page.get("rowMenu");
+  const more = buttons[2];
+  menu.hidden = true;
+  await more.emit("click");
+  assert.equal(menu.hidden, false);
+  assert.equal(more.attributes["aria-expanded"], "true");
+  let focused = null;
+  page.get("rowMenuEdit").focus = () => { focused = "edit"; };
+  page.get("rowMenuDelete").focus = () => { focused = "delete"; };
+  more.focus = () => { focused = "more"; };
+  await menu.emit("keydown", { key: "ArrowDown", target: page.get("rowMenuEdit") });
+  assert.equal(focused, "delete");
+  await menu.emit("keydown", { key: "Escape", target: page.get("rowMenuDelete") });
+  assert.equal(menu.hidden, true);
+  assert.equal(more.attributes["aria-expanded"], "false");
+  assert.equal(focused, "more");
+
+  // Delete from the menu keeps the confirmation that names the time and the video.
+  await more.emit("click");
+  const pending = page.get("rowMenuDelete").emit("click");
+  await flush();
+  assert.equal(page.get("confirmDialog").open, true);
+  assert.match(page.get("confirmDialogDescription").textContent, /^00:20 will be removed from "Plain video"/);
+  await page.get("confirmDeleteButton").emit("click");
+  await pending;
+  await flush();
+  assert.equal(page.store.raw("video:generic:plain").scenes.some((item) => item.id === "p2"), false);
+  assert.equal(page.get("statusLine").textContent, 'Deleted 00:20 from "Plain video".');
+});
+
+test("import messages are plain words, and a broken file names itself", async () => {
+  const page = await openLibrary(seedOf(FAVORITES));
+  const input = page.get("importInput");
+  input.files = [{ name: "notes.txt", text: async () => "not json" }];
+  await input.emit("change");
+  assert.equal(page.get("statusLine").textContent, 'Nothing was imported: "notes.txt" is not a SceneMarks export (it could not be read as JSON).');
+  input.files = [{ name: "other.json", text: async () => "{\"hello\":1}" }];
+  await input.emit("change");
+  assert.match(page.get("statusLine").textContent, /^Nothing was imported: "other.json" has no saved videos/);
+  input.files = [{ name: "backup.json", text: async () => JSON.stringify({ videos: seedOf(FAVORITES.slice(3)) }) }];
+  await input.emit("change");
+  assert.equal(page.get("statusLine").textContent, "Imported 1 video. New timestamps were added; your existing ones and the library order are unchanged."
+    + " 1 timestamp was already saved, so it was combined with the saved one (tags joined, stars kept).");
+});

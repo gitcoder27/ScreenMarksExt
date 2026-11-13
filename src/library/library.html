@@ -28,10 +28,13 @@
           <option value="title">Title</option>
           <option value="platform">Platform</option>
         </select>
-        <label class="favorite-filter" title="Show favorites only">
-          <input id="favoritesOnly" type="checkbox">
+        <label class="favorite-filter" title="Favorite videos: starred videos with all their timestamps. Favorite moments: only starred timestamps, in any video.">
           <span class="favorite-filter__star" aria-hidden="true">&#9733;</span>
-          <span>Favorites</span>
+          <select id="favoritesFilter" aria-label="Favorites">
+            <option value="all">All</option>
+            <option value="videos">Favorite videos</option>
+            <option value="moments">Favorite moments</option>
+          </select>
         </label>
         <div class="toolbar-actions" aria-label="Library expansion controls">
           <button id="playQueueButton" type="button" title="Play the scenes shown, one after another in one tab. Alt+Shift+K / Alt+Shift+J step through them.">Play These</button>
@@ -47,7 +50,10 @@
         </div>
       </section>
 
-      <section id="summaryBox" class="summary-box" role="status"></section>
+      <div class="summary-row">
+        <p id="summaryBox" class="summary-box"></p>
+        <p id="statusLine" class="status-line" role="status" aria-live="polite"></p>
+      </div>
       <section id="libraryList" class="library-list"></section>
 
       <footer class="library-footer">
@@ -58,6 +64,11 @@
         </label>
       </footer>
     </main>
+
+    <div id="rowMenu" class="row-menu" role="menu" aria-label="Timestamp actions" hidden>
+      <button id="rowMenuEdit" type="button" role="menuitem">Edit note and tags</button>
+      <button id="rowMenuDelete" type="button" role="menuitem">Delete timestamp</button>
+    </div>
 
     <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmDialogTitle">
       <h2 id="confirmDialogTitle"></h2>

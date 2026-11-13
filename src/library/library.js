@@ -84,12 +84,80 @@
       .map((entry) => entry.video);
   }
 
+  const FAVORITE_FILTERS = Object.freeze(["all", "videos", "moments"]);
+
+  function normalizeSearch(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function sceneMatches(scene, query) {
+    if (!query) {
+      return true;
+    }
+
+    const haystack = [
+      scene.note,
+      ...(scene.tags || []),
+      formatRange(scene.startSeconds, scene.endSeconds)
+    ].join(" ").toLowerCase();
+
+    return haystack.includes(query);
+  }
+
+  function metadataMatches(video, query) {
+    if (!query) {
+      return true;
+    }
+
+    return [
+      video.title,
+      video.platform,
+      platformLabel(video.platform),
+      video.canonicalUrl,
+      ...(video.rawUrls || [])
+    ].join(" ").toLowerCase().includes(query);
+  }
+
+  // Keeps the input order. Each result is the video with only the scenes
+  // the filters let through:
+  // - a title / platform / URL hit shows every scene, a note / tag / time
+  //   hit only the matching scenes;
+  // - favorites "videos": only starred videos, with all their scenes;
+  // - favorites "moments": only starred scenes, in any video, and only
+  //   videos that have one.
+  function filterVideos(videos, filters) {
+    const query = normalizeSearch(filters && filters.query);
+    const platform = (filters && filters.platform) || "all";
+    const favorites = FAVORITE_FILTERS.includes(filters && filters.favorites) ? filters.favorites : "all";
+    const result = [];
+
+    for (const video of videos) {
+      if (platform !== "all" && video.platform !== platform) {
+        continue;
+      }
+      if (favorites === "videos" && !video.favorite) {
+        continue;
+      }
+
+      const metadataMatch = metadataMatches(video, query);
+      const scenes = video.scenes.filter((scene) => (favorites !== "moments" || scene.favorite)
+        && (metadataMatch || sceneMatches(scene, query)));
+      if (scenes.length || (favorites !== "moments" && metadataMatch)) {
+        result.push(scenes.length === video.scenes.length ? video : { ...video, scenes });
+      }
+    }
+
+    return result;
+  }
+
   SceneMarks.LibraryView = Object.freeze({
     SORT_IDS,
     DEFAULT_SORT,
+    FAVORITE_FILTERS,
     platformLabel,
     lastSavedAt,
-    sortVideos
+    sortVideos,
+    filterVideos
   });
 
   if (typeof document === "undefined") {
@@ -107,7 +175,11 @@
   let state = null;
   let searchRenderTimer = null;
   let sortId = DEFAULT_SORT;
+  // Cards start collapsed, except under "Favorite moments", where the
+  // starred rows are the result and start expanded. Each mode keeps its own
+  // exceptions, so expanding in one does not leak into the other.
   const expandedVideoKeys = new Set();
+  const collapsedMomentKeys = new Set();
   // The filtered videos from the last render, so a collapsed card can build
   // its scene rows when it is first expanded.
   const renderedVideos = new Map();
@@ -127,7 +199,7 @@
     try {
       return { ok: true, value: await action() };
     } catch (error) {
-      elements.summaryBox.textContent = isDeadContextError(error) ? RELOAD_MESSAGE : error.message;
+      elements.statusLine.textContent = isDeadContextError(error) ? RELOAD_MESSAGE : error.message;
       return { ok: false };
     }
   }
@@ -170,72 +242,14 @@
     return button;
   }
 
-  function normalizeSearch(value) {
-    return String(value || "").trim().toLowerCase();
-  }
-
-  function sceneMatches(scene, query) {
-    if (!query) {
-      return true;
-    }
-
-    const haystack = [
-      scene.note,
-      ...(scene.tags || []),
-      formatRange(scene.startSeconds, scene.endSeconds)
-    ].join(" ").toLowerCase();
-
-    return haystack.includes(query);
-  }
-
-  function videoMatches(video, query) {
-    if (!query) {
-      return true;
-    }
-
-    const haystack = [
-      video.title,
-      video.platform,
-      platformLabel(video.platform),
-      video.canonicalUrl,
-      ...video.rawUrls
-    ].join(" ").toLowerCase();
-
-    return haystack.includes(query) || video.scenes.some((scene) => sceneMatches(scene, query));
-  }
-
   function getFilteredVideos() {
-    const query = normalizeSearch(elements.searchInput.value);
-    const platform = elements.platformFilter.value;
-    const favoritesOnly = elements.favoritesOnly.checked;
-
     // Sorted before filtering, on the whole videos, so the order does not
     // depend on which scenes the filters let through.
-    return sortVideos(Object.values(state.videos), sortId)
-      .filter((video) => platform === "all" || video.platform === platform)
-      .filter((video) => videoMatches(video, query))
-      .map((video) => {
-        // A metadata hit (title, platform, URL) surfaces every scene of the
-        // video, while a note/tag hit surfaces only the matching scenes.
-        // videoMatches is invariant across a video's scenes; evaluate the
-        // metadata-only form once instead of per scene.
-        const metadataMatch = videoMatches({ ...video, scenes: [] }, query);
-        return {
-          ...video,
-          scenes: video.scenes.filter((scene) => {
-            const favoriteMatch = !favoritesOnly || video.favorite || scene.favorite;
-            const queryMatch = sceneMatches(scene, query) || metadataMatch;
-            return favoriteMatch && queryMatch;
-          })
-        };
-      })
-      .filter((video) => {
-        if (favoritesOnly) {
-          return video.favorite || video.scenes.length > 0;
-        }
-
-        return video.scenes.length > 0 || videoMatches(video, query);
-      });
+    return filterVideos(sortVideos(Object.values(state.videos), sortId), {
+      query: elements.searchInput.value,
+      platform: elements.platformFilter.value,
+      favorites: elements.favoritesFilter.value
+    });
   }
 
   function readSavedSort() {
@@ -325,7 +339,9 @@
 
   function emptyMessage() {
     if (Object.keys(state.videos).length) {
-      return "No saved scenes match the current filters.";
+      return momentsMode()
+        ? "No favorite moments match. Star a timestamp (\u2606 on its row) to see it here."
+        : "No saved scenes match the current filters.";
     }
 
     const { DEFAULT_SETTINGS } = SceneMarks.Constants;
@@ -339,7 +355,7 @@
     const videos = getFilteredVideos();
 
     if (!videos.length) {
-      elements.summaryBox.textContent = "No videos to pick from under the current filters.";
+      elements.statusLine.textContent = "No videos to pick from under the current filters.";
       return;
     }
 
@@ -360,12 +376,12 @@
 
     if (!response || !response.ok) {
       lastRandomPickKey = null;
-      elements.summaryBox.textContent = (response && response.error) || "Random pick is unavailable right now.";
+      elements.statusLine.textContent = (response && response.error) || "Random pick is unavailable right now.";
       return;
     }
 
     lastRandomPickKey = response.video.videoKey;
-    expandedVideoKeys.add(response.video.videoKey);
+    setVideoCollapsed(response.video.videoKey, false);
     render();
 
     requestAnimationFrame(() => {
@@ -379,19 +395,19 @@
       card.addEventListener("animationend", () => card.classList.remove("is-random-pick"), { once: true });
     });
 
-    elements.summaryBox.textContent = `Random pick: ${response.video.title || "Untitled video"}`;
+    elements.statusLine.textContent = `Random pick: ${response.video.title || "Untitled video"}`;
   }
 
   async function openRandomVideos() {
     const count = Math.floor(Number(elements.randomOpenCount.value));
     if (!Number.isFinite(count) || count < 1) {
-      elements.summaryBox.textContent = "Enter how many videos to open (1 or more).";
+      elements.statusLine.textContent = "Enter how many videos to open (1 or more).";
       return;
     }
 
     const videos = getFilteredVideos();
     if (!videos.length) {
-      elements.summaryBox.textContent = "No videos to pick from under the current filters.";
+      elements.statusLine.textContent = "No videos to pick from under the current filters.";
       return;
     }
 
@@ -412,7 +428,7 @@
     }
 
     if (!response || !response.ok) {
-      elements.summaryBox.textContent = (response && response.error) || "Opening random videos is unavailable right now.";
+      elements.statusLine.textContent = (response && response.error) || "Opening random videos is unavailable right now.";
       return;
     }
 
@@ -422,7 +438,7 @@
       ? ` (only ${response.openedCount} not already open)`
       : "";
     const suffix = titles.length > 5 ? `, and ${titles.length - 5} more` : "";
-    elements.summaryBox.textContent = `Opened ${response.openedCount} random ${response.openedCount === 1 ? "video" : "videos"}${shortfall}: ${shown}${suffix}`;
+    elements.statusLine.textContent = `Opened ${response.openedCount} random ${response.openedCount === 1 ? "video" : "videos"}${shortfall}: ${shown}${suffix}`;
   }
 
   // "Play these": the scenes the current filters show, in the order shown
@@ -446,7 +462,7 @@
       endSeconds: scene.endSeconds
     })));
     if (!all.length) {
-      elements.summaryBox.textContent = "No scenes to play under the current filters.";
+      elements.statusLine.textContent = "No scenes to play under the current filters.";
       return;
     }
     const items = (elements.playQueueShuffle.checked ? shuffled(all) : all).slice(0, MAX_PLAY_QUEUE);
@@ -461,19 +477,19 @@
       elements.playQueueButton.disabled = false;
     }
     if (!response || !response.ok) {
-      elements.summaryBox.textContent = (response && response.error) || "Playing these scenes is unavailable right now.";
+      elements.statusLine.textContent = (response && response.error) || "Playing these scenes is unavailable right now.";
       return;
     }
 
     const hotkeys = (state && state.settings && state.settings.hotkeys) || DEFAULT_SETTINGS.hotkeys;
     const capped = all.length > items.length ? ` (the first ${items.length} of ${all.length})` : "";
-    elements.summaryBox.textContent = `Playing ${response.count} ${response.count === 1 ? "scene" : "scenes"}`
+    elements.statusLine.textContent = `Playing ${response.count} ${response.count === 1 ? "scene" : "scenes"}`
       + ` from ${response.videoCount} ${response.videoCount === 1 ? "video" : "videos"}${capped} in a new tab.`
       + ` In that tab, ${hotkeys.lineupNext} plays the next scene and ${hotkeys.lineupPrevious} the previous one.`;
   }
 
   function handleLibraryKeydown(event) {
-    if (elements.confirmDialog.open) {
+    if (elements.confirmDialog.open || rowMenuTarget) {
       return;
     }
 
@@ -499,12 +515,12 @@
   }
 
   function expandAllVideos() {
-    getFilteredVideos().forEach((video) => expandedVideoKeys.add(video.videoKey));
+    getFilteredVideos().forEach((video) => setVideoCollapsed(video.videoKey, false));
     render();
   }
 
   function collapseAllVideos() {
-    getFilteredVideos().forEach((video) => expandedVideoKeys.delete(video.videoKey));
+    getFilteredVideos().forEach((video) => setVideoCollapsed(video.videoKey, true));
     render();
   }
 
@@ -531,7 +547,12 @@
 
     const caret = createElement("span", "video-title-caret", isCollapsed ? "+" : "-");
     const titleText = createElement("span", "video-title", video.title || "Untitled video");
-    const sceneCount = createElement("span", "video-title-count", plural(video.scenes.length, "scene"));
+    const fullVideo = (state && state.videos[video.videoKey]) || video;
+    const total = fullVideo.scenes.length;
+    // Under a filter the card shows how many of the video's scenes it lists.
+    const sceneCount = createElement("span", "video-title-count", video.scenes.length === total
+      ? plural(total, "scene")
+      : `${video.scenes.length} of ${plural(total, "scene")}`);
     const url = createElement("p", "video-url", video.canonicalUrl || video.rawUrls[0] || video.videoKey);
     const actions = createElement("div", "video-actions");
 
@@ -539,7 +560,7 @@
     actions.append(
       createFavoriteButton(video.favorite, "video", () => toggleVideoFavorite(video.videoKey, !video.favorite)),
       createButton("Open", () => openVideo(video)),
-      createButton("Delete Video", () => deleteVideo(video))
+      createButton("Delete Video", () => deleteVideo(fullVideo))
     );
 
     details.append(platform);
@@ -567,16 +588,24 @@
     video.scenes.forEach((scene) => sceneTable.append(renderScene(video, scene)));
   }
 
+  function momentsMode() {
+    return elements.favoritesFilter.value === "moments";
+  }
+
   function isVideoCollapsed(videoKey) {
-    return !expandedVideoKeys.has(videoKey);
+    return momentsMode() ? collapsedMomentKeys.has(videoKey) : !expandedVideoKeys.has(videoKey);
+  }
+
+  function setVideoCollapsed(videoKey, collapsed) {
+    if (momentsMode()) {
+      collapsedMomentKeys[collapsed ? "add" : "delete"](videoKey);
+    } else {
+      expandedVideoKeys[collapsed ? "delete" : "add"](videoKey);
+    }
   }
 
   function toggleVideoCollapse(videoKey) {
-    if (expandedVideoKeys.has(videoKey)) {
-      expandedVideoKeys.delete(videoKey);
-    } else {
-      expandedVideoKeys.add(videoKey);
-    }
+    setVideoCollapsed(videoKey, !isVideoCollapsed(videoKey));
 
     // Toggle the existing card in place: a full re-render here would drop the
     // scroll position (and the clicked button's focus) every time.
@@ -586,7 +615,7 @@
       return;
     }
 
-    const isCollapsed = !expandedVideoKeys.has(videoKey);
+    const isCollapsed = isVideoCollapsed(videoKey);
     card.classList.toggle("is-collapsed", isCollapsed);
 
     const sceneTable = card.querySelector(".scene-table");
@@ -605,29 +634,136 @@
     }
   }
 
-  function renderScene(video, scene) {
-    const row = createElement("div", "scene-row");
-    const time = createElement("div", "scene-time", formatRange(scene.startSeconds, scene.endSeconds));
-    const body = createElement("div");
-    const note = createElement("p", "scene-note", scene.note || "No note");
-    const actions = createElement("div", "scene-actions");
+  const savedDateFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+  const savedDateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-    body.append(note);
+  function formatSavedDate(iso) {
+    const date = new Date(iso);
+    return Number.isFinite(date.getTime())
+      ? { short: savedDateFormat.format(date), long: savedDateTimeFormat.format(date) }
+      : null;
+  }
+
+  // A row reads at a glance: time, when it was saved, the note only when
+  // there is one, then star, Jump and a "more" menu (Edit, Delete).
+  function renderScene(video, scene) {
+    const row = createElement("div", scene.favorite ? "scene-row is-favorite" : "scene-row");
+    const time = createElement("span", "scene-time", formatRange(scene.startSeconds, scene.endSeconds));
+    const saved = formatSavedDate(scene.createdAt);
+    const savedText = createElement("span", "scene-saved", saved ? saved.short : "");
+    if (saved) {
+      savedText.title = `Saved ${saved.long}`;
+    }
+    const body = createElement("div", "scene-body");
+    if (scene.note) {
+      body.append(createElement("p", "scene-note", scene.note));
+    }
     if (scene.tags && scene.tags.length) {
       body.append(createElement("p", "scene-tags", scene.tags.map((tag) => `#${tag}`).join(" ")));
     }
 
+    const actions = createElement("div", "scene-actions");
+    const label = formatRange(scene.startSeconds, scene.endSeconds);
+    const jump = createButton("Jump", () => openVideoAtScene(video, scene));
+    jump.className = "scene-jump";
+    jump.title = `Open the video at ${label}`;
+    const more = createButton("\u22ef", () => toggleRowMenu(more, video.videoKey, scene.id));
+    more.className = "scene-more";
+    more.title = `More actions for ${label}`;
+    more.setAttribute("aria-label", more.title);
+    more.setAttribute("aria-haspopup", "menu");
+    more.setAttribute("aria-expanded", "false");
     actions.append(
-      createButton("Jump", () => openVideoAtScene(video, scene)),
-      createButton("Open", () => openVideo(video)),
-      createFavoriteButton(scene.favorite, "timestamp", () => toggleFavorite(video.videoKey, scene)),
-      createButton("Edit", () => editScene(video.videoKey, scene)),
-      createButton("Copy Text", () => copyShareText(video, scene)),
-      createButton("Delete", () => deleteScene(video, scene))
+      createFavoriteButton(scene.favorite, `timestamp ${label}`, () => toggleFavorite(video.videoKey, scene)),
+      jump,
+      more
     );
 
-    row.append(time, body, actions);
+    row.append(time, savedText, body, actions);
     return row;
+  }
+
+  // ---- The row "more" menu: one shared element, placed by the button. ----
+
+  let rowMenuTarget = null;
+
+  function rowMenuItems() {
+    return [elements.rowMenuEdit, elements.rowMenuDelete];
+  }
+
+  function toggleRowMenu(trigger, videoKey, sceneId) {
+    if (rowMenuTarget && rowMenuTarget.trigger === trigger) {
+      closeRowMenu(true);
+      return;
+    }
+
+    closeRowMenu(false);
+    rowMenuTarget = { trigger, videoKey, sceneId };
+    trigger.setAttribute("aria-expanded", "true");
+    elements.rowMenu.hidden = false;
+    if (typeof trigger.getBoundingClientRect === "function") {
+      // position: fixed, so the card's overflow cannot clip it.
+      const rect = trigger.getBoundingClientRect();
+      const menuHeight = elements.rowMenu.offsetHeight || 0;
+      const below = rect.bottom + 4;
+      const top = below + menuHeight > window.innerHeight ? Math.max(4, rect.top - 4 - menuHeight) : below;
+      elements.rowMenu.style.top = `${top}px`;
+      elements.rowMenu.style.right = `${Math.max(4, window.innerWidth - rect.right)}px`;
+    }
+    elements.rowMenuEdit.focus();
+  }
+
+  function closeRowMenu(returnFocus) {
+    if (!rowMenuTarget) {
+      return;
+    }
+
+    const { trigger } = rowMenuTarget;
+    rowMenuTarget = null;
+    elements.rowMenu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (returnFocus && trigger.isConnected !== false) {
+      trigger.focus();
+    }
+  }
+
+  function runRowMenuAction(action) {
+    const target = rowMenuTarget;
+    closeRowMenu(true);
+    const video = target && state && state.videos[target.videoKey];
+    const scene = video && video.scenes.find((item) => item.id === target.sceneId);
+    if (scene) {
+      action(video, scene);
+    }
+  }
+
+  function handleRowMenuKeydown(event) {
+    const items = rowMenuItems();
+    const index = items.indexOf(event.target);
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeRowMenu(true);
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      items[(index + step + items.length) % items.length].focus();
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      items[event.key === "Home" ? 0 : items.length - 1].focus();
+    } else if (event.key === "Tab") {
+      closeRowMenu(false);
+    }
+  }
+
+  function handleOutsidePointer(event) {
+    if (!rowMenuTarget) {
+      return;
+    }
+    const target = event.target;
+    if (elements.rowMenu.contains(target) || rowMenuTarget.trigger.contains(target)) {
+      return;
+    }
+    closeRowMenu(false);
   }
 
   function openVideo(video) {
@@ -643,7 +779,7 @@
     }, (response) => {
       const error = chrome.runtime.lastError;
       if (error || !response || !response.ok) {
-        elements.summaryBox.textContent = error
+        elements.statusLine.textContent = error
           ? error.message
           : response && response.error ? response.error : "Could not open video.";
       }
@@ -653,7 +789,7 @@
   async function openVideoAtScene(video, scene) {
     const url = video.canonicalUrl || video.rawUrls[0];
     if (!url) {
-      elements.summaryBox.textContent = "This saved video does not have an openable URL.";
+      elements.statusLine.textContent = "This saved video does not have an openable URL.";
       return;
     }
 
@@ -665,13 +801,13 @@
     }, (response) => {
       const error = chrome.runtime.lastError;
       if (error || !response || !response.ok) {
-        elements.summaryBox.textContent = error
+        elements.statusLine.textContent = error
           ? error.message
           : response && response.error ? response.error : "Could not open video.";
         return;
       }
 
-      elements.summaryBox.textContent = "Opening video and queued timestamp jump.";
+      elements.statusLine.textContent = "Opening video and queued timestamp jump.";
     });
   }
 
@@ -701,6 +837,7 @@
 
   async function deleteVideo(video) {
     const title = video.title || video.canonicalUrl || video.videoKey;
+    const sceneCount = video.scenes.length;
     const sceneWord = video.scenes.length === 1 ? "scene" : "scenes";
     const confirmed = await openConfirmDialog({
       title: "Delete this video?",
@@ -716,6 +853,10 @@
     if (!action.ok) {
       return;
     }
+
+    elements.statusLine.textContent = action.value && action.value.ok
+      ? `Deleted "${title}" and its ${plural(sceneCount, "timestamp")}.`
+      : "That video was already gone.";
   }
 
   async function deleteScene(video, scene) {
@@ -734,6 +875,10 @@
     if (!action.ok) {
       return;
     }
+
+    elements.statusLine.textContent = action.value && action.value.ok === false
+      ? "That timestamp was already gone."
+      : `Deleted ${formatRange(scene.startSeconds, scene.endSeconds)} from "${video.title || video.canonicalUrl || video.videoKey}".`;
   }
 
   async function editScene(videoKey, scene) {
@@ -761,11 +906,11 @@
 
     const result = action.value;
     if (!result.ok) {
-      elements.summaryBox.textContent = result.error || "Could not update video favorite.";
+      elements.statusLine.textContent = result.error || "Could not update video favorite.";
       return;
     }
 
-    elements.summaryBox.textContent = favorite
+    elements.statusLine.textContent = favorite
       ? "Video added to favorites."
       : "Video removed from favorites.";
   }
@@ -774,27 +919,6 @@
     const action = await runStorageAction(() => Storage.updateScene(videoKey, scene.id, { favorite: !scene.favorite }));
     if (!action.ok) {
       return;
-    }
-  }
-
-  async function copyShareText(video, scene) {
-    const lines = [
-      `${video.title || "Saved scene"}`,
-      scene.endSeconds === null
-        ? `Time: ${formatRange(scene.startSeconds, scene.endSeconds)}`
-        : `Range: ${formatRange(scene.startSeconds, scene.endSeconds)}`,
-      `Platform: ${video.platform}`
-    ];
-
-    if (scene.note) {
-      lines.push(`Note: ${scene.note}`);
-    }
-
-    try {
-      await navigator.clipboard.writeText(lines.join("\n"));
-      elements.summaryBox.textContent = "Share text copied.";
-    } catch (_error) {
-      elements.summaryBox.textContent = "Clipboard copy failed. Select and copy manually from the scene note.";
     }
   }
 
@@ -809,6 +933,9 @@
     anchor.download = `scenemarks-export-${new Date().toISOString().slice(0, 10)}.json`;
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
+    const videos = Object.values(exportState.videos);
+    const sceneCount = videos.reduce((total, video) => total + video.scenes.length, 0);
+    elements.statusLine.textContent = `Exported ${plural(videos.length, "video")} and ${plural(sceneCount, "timestamp")} to ${anchor.download} in your downloads folder.`;
   }
 
   async function importData(file) {
@@ -820,8 +947,15 @@
     try {
       const text = await file.text();
       parsed = JSON.parse(text);
-    } catch (error) {
-      elements.summaryBox.textContent = `Import failed: ${error.message}`;
+    } catch (_error) {
+      elements.importInput.value = "";
+      elements.statusLine.textContent = `Nothing was imported: "${file.name}" is not a SceneMarks export (it could not be read as JSON).`;
+      return;
+    }
+
+    if (!parsed || typeof parsed !== "object" || !parsed.videos || typeof parsed.videos !== "object") {
+      elements.importInput.value = "";
+      elements.statusLine.textContent = `Nothing was imported: "${file.name}" has no saved videos in it. Choose a file made by Export JSON or by the automatic backup.`;
       return;
     }
 
@@ -832,7 +966,26 @@
     }
 
     elements.importInput.value = "";
-    elements.summaryBox.textContent = `Import complete: ${action.value.videoCount} videos; ${action.value.mergedScenes} scenes merged, ${action.value.conflictingScenes} conflicting annotations preserved separately, ${action.value.repairedScenes} scenes repaired, ${action.value.rejectedScenes} invalid scenes rejected.`;
+    elements.statusLine.textContent = describeImport(action.value);
+  }
+
+  // The merge report counts only the exceptions; timestamps that were new
+  // are simply added, so they need no count of their own.
+  function describeImport(result) {
+    const parts = [`Imported ${plural(result.videoCount, "video")}. New timestamps were added; your existing ones and the library order are unchanged.`];
+    if (result.mergedScenes) {
+      parts.push(`${plural(result.mergedScenes, "timestamp")} ${result.mergedScenes === 1 ? "was" : "were"} already saved, so ${result.mergedScenes === 1 ? "it was" : "they were"} combined with the saved one (tags joined, stars kept).`);
+    }
+    if (result.conflictingScenes) {
+      parts.push(`${plural(result.conflictingScenes, "timestamp")} differed from a saved one with the same ID and ${result.conflictingScenes === 1 ? "was" : "were"} kept as a separate copy.`);
+    }
+    if (result.repairedScenes) {
+      parts.push(`${plural(result.repairedScenes, "timestamp")} with a duplicate ID or a reversed range ${result.repairedScenes === 1 ? "was" : "were"} fixed.`);
+    }
+    if (result.rejectedScenes) {
+      parts.push(`${plural(result.rejectedScenes, "timestamp")} could not be read and ${result.rejectedScenes === 1 ? "was" : "were"} skipped.`);
+    }
+    return parts.join(" ");
   }
 
   let loadingState = false;
@@ -898,7 +1051,11 @@
       "searchInput",
       "platformFilter",
       "sortSelect",
-      "favoritesOnly",
+      "favoritesFilter",
+      "statusLine",
+      "rowMenu",
+      "rowMenuEdit",
+      "rowMenuDelete",
       "playQueueButton",
       "playQueueShuffle",
       "randomVideoButton",
@@ -928,7 +1085,7 @@
     });
     elements.platformFilter.addEventListener("change", render);
     elements.sortSelect.addEventListener("change", changeSort);
-    elements.favoritesOnly.addEventListener("change", render);
+    elements.favoritesFilter.addEventListener("change", render);
     elements.playQueueButton.addEventListener("click", playFilteredScenes);
     elements.randomVideoButton.addEventListener("click", pickRandomVideo);
     elements.openRandomVideosButton.addEventListener("click", openRandomVideos);
@@ -944,6 +1101,13 @@
     elements.importInput.addEventListener("change", () => importData(elements.importInput.files[0]));
     elements.confirmCancelButton.addEventListener("click", () => closeConfirmDialog(false));
     elements.confirmDeleteButton.addEventListener("click", () => closeConfirmDialog(true));
+    elements.rowMenuEdit.addEventListener("click", () => runRowMenuAction((video, scene) => editScene(video.videoKey, scene)));
+    elements.rowMenuDelete.addEventListener("click", () => runRowMenuAction(deleteScene));
+    elements.rowMenu.addEventListener("keydown", handleRowMenuKeydown);
+    document.addEventListener("pointerdown", handleOutsidePointer, true);
+    // The menu is placed against its button, so it closes rather than drift.
+    window.addEventListener("scroll", () => closeRowMenu(false), { passive: true });
+    window.addEventListener("resize", () => closeRowMenu(false));
     elements.confirmDialog.addEventListener("cancel", (event) => {
       // Esc fires the native "cancel"; resolve it through the same path
       // as the Cancel button instead of leaving the promise pending.
