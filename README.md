@@ -51,7 +51,7 @@ The same flow works in Chrome at `chrome://extensions`.
 
 ## Overlay Panel
 
-The draggable overlay offers **Quick Save**, **Mark range start/end**, and **Open Library**, and lists the saved timestamps of the video on the page. Click one to jump to it.
+The draggable overlay offers **Quick Save**, **Mark range start** / **Mark range end**, and **Open Library**, and lists the saved timestamps of the video on the page. Click one to jump to it. The mark playback is at (the latest one at or before the current time) is highlighted and kept in view inside the list, and the header shows its position, such as `3/12`. The **‹** and **›** buttons step to the previous and next saved time, like `Alt+Shift+B` / `Alt+Shift+N`. While a range is open on this video the panel says `Range open from 12:04` and the range button reads **Mark range end**; a range open on another video is never shown.
 
 It opens at the top right of the window, below a typical site header, so the player's own bottom-right controls (volume, settings, fullscreen) stay reachable. Drag it by its header to move it: the position is saved when the drag ends, once per platform (Netflix, Prime Video, Hotstar, YouTube, other sites), so every YouTube tab uses the same spot and other open tabs follow without a reload. The **–** button collapses the panel to a small pill that shows only how many times are saved; **+** expands it again. The pill state is shared by all tabs.
 

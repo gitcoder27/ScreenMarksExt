@@ -51,3 +51,22 @@ test("describeCapture gives one fixed message per save outcome, with times only"
     assert.doesNotMatch(say(action, { ok: false, error: "secret note" }, 0).text, /secret/);
   }
 });
+
+test("nearestMarkIndex finds the mark playback is at, never one ahead", () => {
+  const starts = [10, 60, 60.5, 300, 1200];
+  assert.equal(Time.nearestMarkIndex(starts, 0), -1, "before the first mark nothing is current");
+  assert.equal(Time.nearestMarkIndex(starts, 9.8), 0, "a seek landing just short still counts");
+  assert.equal(Time.nearestMarkIndex(starts, 10), 0);
+  assert.equal(Time.nearestMarkIndex(starts, 59), 0, "stays on the scene until the next one starts");
+  assert.equal(Time.nearestMarkIndex(starts, 60), 1);
+  assert.equal(Time.nearestMarkIndex(starts, 61), 2);
+  assert.equal(Time.nearestMarkIndex(starts, 299.9), 3);
+  assert.equal(Time.nearestMarkIndex(starts, 5000), 4);
+  assert.equal(Time.nearestMarkIndex([], 30), -1);
+  assert.equal(Time.nearestMarkIndex(null, 30), -1);
+  assert.equal(Time.nearestMarkIndex(starts, Number.NaN), -1);
+  const many = Array.from({ length: 50 }, (_, i) => i * 15);
+  for (let i = 0; i < 50; i += 1) {
+    assert.equal(Time.nearestMarkIndex(many, i * 15 + 7), i);
+  }
+});

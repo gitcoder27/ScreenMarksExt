@@ -149,11 +149,14 @@
       schedulePendingJumpCheck(500);
       reportVideoPresence();
     },
-    onPlaybackTick: () => {
+    onPlaybackTick: (seconds) => {
       if (isContextDead()) {
         tearDownDeadContext();
         return;
       }
+
+      // The overlay changes its DOM only when the current mark changes.
+      if (overlay) overlay.setPlaybackTime(seconds);
     }
   });
 
@@ -997,6 +1000,11 @@
         overlay.setMarks(marksChange.newValue ? marksChange.newValue.scenes : []);
       }
 
+      const draftChange = overlay && overlayMarksKey && changes[STORAGE_KEYS.ACTIVE_RANGE_DRAFT];
+      if (draftChange) {
+        overlay.setRangeDraft(overlayRangeDraft(SceneMarks.Schema.normalizeDraft(draftChange.newValue)));
+      }
+
       if (changes[STORAGE_KEYS.PENDING_JUMP]) schedulePendingJumpCheck(100);
     });
   }
@@ -1033,6 +1041,14 @@
     syncOverlayMarks();
   }
 
+  // Only a range open on the video the overlay shows reaches the page, and
+  // only its start time: a range on another video would leak activity.
+  function overlayRangeDraft(draft) {
+    return draft && overlayMarksKey && draft.videoKey === overlayMarksKey && Number.isFinite(draft.startSeconds)
+      ? { startSeconds: draft.startSeconds }
+      : null;
+  }
+
   // Reads one video, and only when the visible overlay needs a different one
   // than it holds, so a background tab or a page with no video reads nothing.
   // After that, the storage listener keeps the list current.
@@ -1044,9 +1060,15 @@
     overlayMarksKey = videoKey;
     const seq = ++overlayMarksSeq;
     overlay.setMarks(null);
+    overlay.setRangeDraft(null);
     if (!videoKey) return;
-    Storage.getScenesForVideo(videoKey).then((scenes) => {
-      if (seq === overlayMarksSeq && overlay) overlay.setMarks(scenes);
+    overlay.setPlaybackTime(snapshot.currentTimeSeconds);
+    // One scoped read: this video plus the small keys (the range draft).
+    Storage.getState({ videoKeys: [videoKey] }).then((state) => {
+      if (seq !== overlayMarksSeq || !overlay) return;
+      const video = state.videos[videoKey];
+      overlay.setMarks(video ? video.scenes : []);
+      overlay.setRangeDraft(overlayRangeDraft(state.activeRangeDraft));
     }).catch((error) => {
       if (isInvalidContextError(error)) {
         tearDownDeadContext();
@@ -1141,6 +1163,8 @@
       jumpToMark: guard((seconds) => isActiveHere()
         ? seekTo({ seconds, expectedVideoKey: overlayMarksKey })
         : INACTIVE_RESPONSE),
+      previousMark: guard(() => isActiveHere() ? jumpToPreviousScene() : INACTIVE_RESPONSE),
+      nextMark: guard(() => isActiveHere() ? jumpToNextScene() : INACTIVE_RESPONSE),
       // The two layout writes, made only on a drag end and a pill click.
       // Entering fullscreen, fading or applying another tab's change
       // writes nothing.

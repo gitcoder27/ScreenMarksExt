@@ -87,8 +87,34 @@
     return r.ok ? { ok: true, tone: "success", text: "Done" } : fail("Something went wrong");
   }
 
+  // The overlay's highlight: the index of the saved mark playback is at,
+  // that is the nearest mark at or before `seconds` (a quarter second early
+  // still counts, since a seek can land just short of its target). Before
+  // the first mark, or with no marks, -1. `starts` is sorted ascending.
+  // Playback inside a scene stays on that scene until the next one starts,
+  // matching where Previous / Next step from.
+  const MARK_TOLERANCE_SECONDS = 0.25;
+  function nearestMarkIndex(starts, seconds) {
+    if (!Array.isArray(starts) || !starts.length || !Number.isFinite(seconds)) return -1;
+    const target = seconds + MARK_TOLERANCE_SECONDS;
+    let low = 0;
+    let high = starts.length - 1;
+    let found = -1;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      if (starts[middle] <= target) {
+        found = middle;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return found;
+  }
+
   SceneMarks.Time = {
     describeCapture,
+    nearestMarkIndex,
     formatRange,
     formatSeconds,
     isValidSeconds,

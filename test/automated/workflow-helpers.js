@@ -31,6 +31,7 @@ class FakeElement {
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   get firstChild() { return this.children[0] || null; }
   setAttribute(key, value) { this.attributes[key] = value; }
+  removeAttribute(key) { delete this.attributes[key]; }
   closest(selector) { return selector.split(",").some((part) => part.trim().toUpperCase() === this.tagName) ? this : null; }
   focus() {}
   blur() {}

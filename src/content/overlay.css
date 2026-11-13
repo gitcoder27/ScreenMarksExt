@@ -109,6 +109,22 @@
   color: #f8fafc;
 }
 
+.scenemarks-overlay__icon-button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.scenemarks-overlay__icon-button:disabled:hover {
+  background: transparent;
+  color: #cbd5e1;
+}
+
+.scenemarks-overlay__previous,
+.scenemarks-overlay__next {
+  font-size: 20px;
+  padding-bottom: 2px;
+}
+
 .scenemarks-overlay__icon-button:focus-visible {
   outline: 3px solid #60a5fa;
   outline-offset: 1px;
@@ -142,6 +158,8 @@
 
 /* Scrolls inside the panel so a long list cannot push the actions off screen. */
 .scenemarks-overlay__mark-list {
+  /* Positioned, so a button's offsetTop is measured inside the list. */
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -169,6 +187,22 @@
 
 .scenemarks-overlay__mark:hover {
   background: #334155;
+}
+
+/* The mark playback is at. */
+.scenemarks-overlay__mark.is-current {
+  background: #1d4ed8;
+  border-color: #93c5fd;
+  color: #ffffff;
+}
+
+.scenemarks-overlay__range {
+  color: #fbbf24;
+  font-weight: 700;
+}
+
+.scenemarks-overlay__range[hidden] {
+  display: none;
 }
 
 .scenemarks-overlay__secondary {

@@ -1,6 +1,6 @@
 (function attachOverlay(root) {
   const SceneMarks = root.SceneMarks || {};
-  const { formatRange, formatSeconds } = SceneMarks.Time;
+  const { formatRange, formatSeconds, nearestMarkIndex } = SceneMarks.Time;
 
   // This DOM belongs to the visited website. The only saved data allowed here
   // is the times of the video on this page (setMarks), like the jump toasts.
@@ -15,13 +15,24 @@
     const title = document.createElement("span");
     title.className = "scenemarks-overlay__title";
     title.textContent = "SceneMarks";
-    // The pill shows only this count of the current video's saved times.
+    // The pill shows only this count of the current video's saved times,
+    // with the position of the current mark ("3/12") once playback is at
+    // one.
     const count = document.createElement("span");
     count.className = "scenemarks-overlay__count";
-    const collapseButton = document.createElement("button");
-    collapseButton.type = "button";
-    collapseButton.className = "scenemarks-overlay__icon-button";
-    header.append(title, count, collapseButton);
+    function createIconButton(className, text, label) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `scenemarks-overlay__icon-button ${className}`;
+      button.textContent = text;
+      button.title = label;
+      button.setAttribute("aria-label", label);
+      return button;
+    }
+    const previousButton = createIconButton("scenemarks-overlay__previous", "\u2039", "Previous saved time");
+    const nextButton = createIconButton("scenemarks-overlay__next", "\u203a", "Next saved time");
+    const collapseButton = createIconButton("scenemarks-overlay__collapse", "", "Collapse SceneMarks");
+    header.append(title, count, previousButton, nextButton, collapseButton);
     const body = document.createElement("div");
     body.className = "scenemarks-overlay__body";
     const hint = document.createElement("p");
@@ -35,7 +46,11 @@
     const marksList = document.createElement("div");
     marksList.className = "scenemarks-overlay__mark-list";
     marks.append(marksStatus, marksList);
-    body.append(hint, marks);
+    // "Range open from 12:04", only for a draft on this video.
+    const rangeLine = document.createElement("p");
+    rangeLine.className = "scenemarks-overlay__status scenemarks-overlay__range";
+    rangeLine.hidden = true;
+    body.append(hint, marks, rangeLine);
     host.append(header, body);
     let enabled = false;
     let toastTimer = null;
@@ -52,6 +67,15 @@
     // Held here, outside page-readable DOM; the list of buttons exists
     // only while the panel is shown and expanded.
     let currentScenes = null;
+    // Start times of currentScenes, the mark buttons built from them, the
+    // highlighted index and the last playback time seen.
+    let starts = [];
+    let markButtons = [];
+    let highlightIndex = -1;
+    let playbackSeconds = Number.NaN;
+    // Start of an open range on this video, or null.
+    let rangeStart = null;
+    let rangeButton = null;
     const EDGE = 8;
     const toast = document.createElement("div");
     toast.className = "scenemarks-toast";
@@ -103,13 +127,49 @@
         }
       });
       body.append(button);
+      return button;
+    }
+
+    // Previous / next: the same steps as the page hotkeys. Their results
+    // carry only fixed text and this video's times.
+    function addStepHandler(button, action) {
+      button.addEventListener("click", async (event) => {
+        if (!event.isTrusted || !enabled || typeof action !== "function") return;
+        button.disabled = true;
+        try {
+          const result = await action();
+          if (result && result.inactive) {
+            showToast("SceneMarks is off on this site", "error");
+          } else if (result && result.ok) {
+            showToast(typeof result.message === "string" ? result.message.slice(0, 120) : "Done", "success");
+          } else {
+            showToast(result && typeof result.error === "string" ? result.error.slice(0, 120) : "Could not jump.", "error");
+          }
+        } catch (_error) {
+          showToast("Could not jump.", "error");
+        } finally {
+          updateStepButtons();
+          if (event.detail > 0) button.blur();
+        }
+      });
+    }
+
+    function updateStepButtons() {
+      const empty = !enabled || !Array.isArray(currentScenes) || currentScenes.length === 0;
+      previousButton.disabled = empty;
+      nextButton.disabled = empty;
+    }
+
+    function markClassName(index) {
+      return index === highlightIndex ? "scenemarks-overlay__mark is-current" : "scenemarks-overlay__mark";
     }
 
     function createMarkButton(scene, index, total) {
       const seconds = Number(scene.startSeconds);
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "scenemarks-overlay__mark";
+      button.className = markClassName(index);
+      if (index === highlightIndex) button.setAttribute("aria-current", "true");
       button.textContent = formatRange(seconds, scene.endSeconds);
       button.setAttribute("aria-label", `Jump to ${formatSeconds(seconds)}`);
       button.addEventListener("click", async (event) => {
@@ -131,27 +191,92 @@
       return button;
     }
 
+    function renderCount() {
+      const scenes = enabled ? currentScenes : null;
+      if (!Array.isArray(scenes)) {
+        count.textContent = "";
+      } else {
+        count.textContent = highlightIndex >= 0 ? `${highlightIndex + 1}/${scenes.length}` : String(scenes.length);
+      }
+    }
+
+    function renderRange() {
+      const open = enabled && !collapsed && rangeStart !== null;
+      rangeLine.hidden = !open;
+      rangeLine.textContent = open ? `Range open from ${formatSeconds(rangeStart)}` : "";
+      if (rangeButton) rangeButton.textContent = rangeStart !== null ? "Mark range end" : "Mark range start";
+    }
+
+    // Scrolls the list itself, never the page, to show the button.
+    function scrollIntoList(button) {
+      let hovered = false;
+      try { hovered = marksList.matches(":hover"); } catch (_error) { /* Fake DOM. */ }
+      if (hovered || !button) return; // Leave a list the user is browsing alone.
+      const top = button.offsetTop;
+      const bottom = top + button.offsetHeight;
+      if (top < marksList.scrollTop) {
+        marksList.scrollTop = Math.max(0, top - 4);
+      } else if (bottom > marksList.scrollTop + marksList.clientHeight) {
+        marksList.scrollTop = bottom - marksList.clientHeight + 4;
+      }
+    }
+
     function renderMarks() {
       const scenes = enabled ? currentScenes : null;
-      count.textContent = Array.isArray(scenes) ? String(scenes.length) : "";
+      highlightIndex = Array.isArray(scenes) ? nearestMarkIndex(starts, playbackSeconds) : -1;
+      renderCount();
+      updateStepButtons();
+      renderRange();
       marks.hidden = !Array.isArray(scenes);
       if (marks.hidden || collapsed) {
         // Hidden or collapsed: no time is left in the page's DOM.
         marksStatus.textContent = "";
+        markButtons = [];
         marksList.replaceChildren();
         return;
       }
       marksStatus.textContent = scenes.length
         ? `Saved timestamps (${scenes.length})`
         : "No saved timestamps for this video.";
-      marksList.replaceChildren(...scenes.map((scene, index) => createMarkButton(scene, index, scenes.length)));
+      markButtons = scenes.map((scene, index) => createMarkButton(scene, index, scenes.length));
+      marksList.replaceChildren(...markButtons);
+      scrollIntoList(markButtons[highlightIndex]);
+    }
+
+    // Called on every playback tick; touches the DOM only when the mark
+    // playback is at changes.
+    function setPlaybackTime(seconds) {
+      playbackSeconds = Number(seconds);
+      if (!enabled || !Array.isArray(currentScenes)) return;
+      const index = nearestMarkIndex(starts, playbackSeconds);
+      if (index === highlightIndex) return;
+      const previous = markButtons[highlightIndex];
+      highlightIndex = index;
+      if (previous) {
+        previous.className = "scenemarks-overlay__mark";
+        previous.removeAttribute("aria-current");
+      }
+      const current = markButtons[highlightIndex];
+      if (current) {
+        current.className = markClassName(highlightIndex);
+        current.setAttribute("aria-current", "true");
+        scrollIntoList(current);
+      }
+      renderCount();
     }
 
     // scenes: the current video's saved scenes in time order, or null when
     // no video is detected. Only their times are used.
     function setMarks(scenes) {
       currentScenes = Array.isArray(scenes) ? scenes : null;
+      starts = currentScenes ? currentScenes.map((scene) => Number(scene.startSeconds)) : [];
       renderMarks();
+    }
+
+    // draft: { startSeconds } of a range open on this video, or null.
+    function setRangeDraft(draft) {
+      rangeStart = draft && Number.isFinite(draft.startSeconds) ? draft.startSeconds : null;
+      renderRange();
     }
 
     function setEnabled(value) {
@@ -161,6 +286,8 @@
       host.hidden = !enabled;
       if (!enabled) {
         currentScenes = null;
+        starts = [];
+        rangeStart = null;
         drag = null;
       }
       renderMarks();
@@ -171,6 +298,7 @@
     function applyCollapsed() {
       host.className = collapsed ? "scenemarks-overlay is-collapsed" : "scenemarks-overlay";
       collapseButton.textContent = collapsed ? "+" : "\u2013";
+      collapseButton.className = "scenemarks-overlay__icon-button scenemarks-overlay__collapse";
       collapseButton.setAttribute("aria-label", collapsed ? "Expand SceneMarks" : "Collapse SceneMarks");
       collapseButton.setAttribute("aria-expanded", collapsed ? "false" : "true");
       collapseButton.title = collapsed ? "Expand" : "Collapse to a pill";
@@ -233,8 +361,10 @@
     }
 
     addButton("Quick Save", actions.quickSave);
-    addButton("Mark range start/end", actions.toggleRange);
+    rangeButton = addButton("Mark range start", actions.toggleRange);
     addButton("Open Library", actions.openLibrary, "Opening the Library");
+    addStepHandler(previousButton, actions.previousMark);
+    addStepHandler(nextButton, actions.nextMark);
 
     collapseButton.addEventListener("click", (event) => {
       if (!event.isTrusted || !enabled) return;
@@ -300,6 +430,8 @@
       setEnabled,
       setLayout,
       setMarks,
+      setPlaybackTime,
+      setRangeDraft,
       showToast,
       destroy() {
         root.clearTimeout(toastTimer);

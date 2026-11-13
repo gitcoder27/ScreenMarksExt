@@ -614,11 +614,13 @@ test("a play-queue step in place toasts its position, and a landed queue jump sh
 function overlayParts(work) {
   const host = work.document.body.children[0];
   const header = host.children[0];
-  const byClass = (name) => header.children.find((node) => node.className === name);
+  const byClass = (name) => header.children.find((node) => node.className.split(" ").includes(name));
   return {
     host, header,
     count: byClass("scenemarks-overlay__count"),
-    collapse: byClass("scenemarks-overlay__icon-button")
+    previous: byClass("scenemarks-overlay__previous"),
+    next: byClass("scenemarks-overlay__next"),
+    collapse: byClass("scenemarks-overlay__collapse")
   };
 }
 
@@ -626,7 +628,7 @@ test("a hidden overlay holds an empty list and follows no changes until shown", 
   const work = loadContent({ seed: savedLibrary() });
   await flush();
   assert.deepEqual(markTexts(work), ["00:10 -> 00:25", "02:10"]);
-  assert.equal(overlayParts(work).count.textContent, "2");
+  assert.equal(overlayParts(work).count.textContent, "1/2");
   await work.context.SceneMarks.Storage.updateSettings({ enableFloatingButton: false });
   await flush();
   assert.equal(overlayParts(work).host.hidden, true);
@@ -658,7 +660,7 @@ test("the pill shows only the count, writes once per trusted click, and applies 
   await collapse.emit("click", { isTrusted: true, detail: 1 });
   await flush();
   assert.equal(host.className, "scenemarks-overlay is-collapsed");
-  assert.equal(count.textContent, "2");
+  assert.equal(count.textContent, "1/2");
   assert.deepEqual(markTexts(work), [], "a collapsed pill keeps no times in the page");
   assert.equal(work.store.writes, writes + 1);
   assert.equal(work.store.readState().settings.overlay.collapsed, true);
@@ -716,4 +718,111 @@ test("dragging writes this platform's position once, on drag end, and other tabs
   assert.equal(host.style.left, `${8 + 864}px`);
   assert.equal(host.style.top, "8px");
   assert.equal(work.store.writes, writes + 1);
+});
+
+function rangeLine(work) {
+  const body = work.document.body.children[0].children[1];
+  return body.children.find((node) => /scenemarks-overlay__range/.test(node.className));
+}
+
+const currentMarks = (work) => overlayMarks(work).buttons
+  .filter((button) => /is-current/.test(button.className)).map((button) => button.textContent);
+
+test("the highlight follows playback and changes the DOM only when the current mark changes", async () => {
+  const scenes = Array.from({ length: 50 }, (_, i) => ({ id: `s${i}`, startSeconds: 30 + i * 15 }));
+  const seed = { schemaVersion: 3, [`video:${SNAPSHOT.videoKey}`]: savedVideo(SNAPSHOT.videoKey, scenes) };
+  const work = loadContent({ seed });
+  await flush();
+  const { count } = overlayParts(work);
+  // Playback at 60 s: the mark at 01:00 (index 2).
+  assert.deepEqual(currentMarks(work), ["01:00"]);
+  assert.equal(count.textContent, "3/50");
+  const tick = (seconds) => work.detectorOptions().onPlaybackTick(seconds);
+
+  const buttons = overlayMarks(work).buttons;
+  let classWrites = 0;
+  for (const button of buttons) {
+    let value = button.className;
+    Object.defineProperty(button, "className", { get: () => value, set: (next) => { classWrites += 1; value = next; } });
+  }
+  const list = overlayMarks(work).section.children[1];
+  for (let seconds = 60; seconds < 74.75; seconds += 0.25) tick(seconds);
+  assert.equal(classWrites, 0, "ticks inside one scene touch nothing");
+  tick(75);
+  assert.deepEqual(currentMarks(work), ["01:15"]);
+  assert.equal(classWrites, 2);
+  assert.equal(count.textContent, "4/50");
+  assert.equal(overlayMarks(work).buttons, buttons, "the list is not rebuilt");
+
+  // Far down the list, the list itself scrolls to the mark.
+  Object.assign(list, { scrollTop: 0, clientHeight: 168 });
+  buttons.forEach((button, index) => Object.assign(button, { offsetTop: Math.floor(index / 4) * 32, offsetHeight: 26 }));
+  tick(30 + 40 * 15 + 3);
+  assert.deepEqual(currentMarks(work), ["10:30"]);
+  assert.equal(list.scrollTop, 320 + 26 - 168 + 4);
+  assert.equal(buttons[40].attributes["aria-current"], "true");
+  assert.equal(buttons[3].attributes["aria-current"], undefined);
+
+  tick(5);
+  assert.deepEqual(currentMarks(work), [], "before the first mark nothing is highlighted");
+  assert.equal(count.textContent, "50");
+  assert.doesNotMatch(JSON.stringify(buttons.map((button) => button.attributes)), /s\d/, "no scene ID in an attribute");
+});
+
+test("previous and next step through this video's marks on trusted clicks only", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  const { previous, next } = overlayParts(work);
+  assert.equal(previous.disabled, false);
+  await next.emit("click", { isTrusted: false, detail: 1 });
+  await previous.emit("click", { isTrusted: false, detail: 1 });
+  assert.equal(work.seeks.length, 0);
+  await next.emit("click", { isTrusted: true, detail: 1 });
+  assert.equal(work.seeks.at(-1).seconds, 130);
+  assert.equal(toastText(work), "Jumped to 02:10 (2/2)");
+  work.setSnapshot({ currentTimeSeconds: 130 });
+  await previous.emit("click", { isTrusted: true, detail: 1 });
+  assert.equal(work.seeks.at(-1).seconds, 10);
+  assert.equal(toastText(work), "Jumped to 00:10 (1/2)");
+  assert.doesNotMatch(pageText(work), /confidential/);
+
+  // No saved times: both are disabled.
+  work.setSnapshot({ videoKey: "generic:v2:https://example.com/watch?id=empty" });
+  work.detectorOptions().onContextChange();
+  await flush();
+  assert.equal(previous.disabled, true);
+  assert.equal(next.disabled, true);
+});
+
+test("the open-range line and button label follow a draft on this video only", async () => {
+  const work = loadContent({ seed: savedLibrary() });
+  await flush();
+  const range = work.document.body.children[0].children[1].children
+    .filter((node) => node.tagName === "BUTTON")[1];
+  assert.equal(range.textContent, "Mark range start");
+  assert.equal(rangeLine(work).hidden, true);
+
+  work.setSnapshot({ currentTimeSeconds: 724 });
+  await range.emit("click", { isTrusted: true, detail: 1 });
+  await flush();
+  assert.equal(rangeLine(work).hidden, false);
+  assert.equal(rangeLine(work).textContent, "Range open from 12:04");
+  assert.equal(range.textContent, "Mark range end");
+
+  // A range opened on another video (in another tab) shows nothing here.
+  const now = new Date().toISOString();
+  const otherDraft = { videoKey: OTHER_KEY, platform: "generic", startSeconds: 300, createdAt: now, updatedAt: now };
+  for (const listener of work.changed) listener({ activeRangeDraft: { newValue: otherDraft } }, "local");
+  assert.equal(rangeLine(work).hidden, true);
+  assert.equal(rangeLine(work).textContent, "");
+  assert.equal(range.textContent, "Mark range start");
+  assert.doesNotMatch(pageText(work), /05:00/);
+
+  // Loaded fresh with the other video's draft stored: still nothing.
+  const seed = savedLibrary();
+  seed.activeRangeDraft = otherDraft;
+  const fresh = loadContent({ seed });
+  await flush();
+  assert.equal(rangeLine(fresh).hidden, true);
+  assert.doesNotMatch(pageText(fresh), /05:00/);
 });
