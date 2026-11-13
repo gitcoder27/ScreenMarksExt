@@ -27,6 +27,11 @@
           <span>Favorites</span>
         </label>
         <div class="toolbar-actions" aria-label="Library expansion controls">
+          <button id="playQueueButton" type="button" title="Play the scenes shown, one after another in one tab. Alt+Shift+K / Alt+Shift+J step through them.">Play These</button>
+          <label class="shuffle-toggle" title="Play the scenes in random order">
+            <input id="playQueueShuffle" type="checkbox">
+            <span>Shuffle</span>
+          </label>
           <button id="randomVideoButton" type="button" title="Pick a random video (R)">Random</button>
           <input id="randomOpenCount" type="number" min="1" step="1" value="5" title="How many random videos to open" aria-label="Number of random videos to open">
           <button id="openRandomVideosButton" type="button" title="Open that many random videos in new tabs">Open Random</button>

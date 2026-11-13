@@ -290,6 +290,53 @@
     elements.summaryBox.textContent = `Opened ${response.openedCount} random ${response.openedCount === 1 ? "video" : "videos"}${shortfall}: ${shown}${suffix}`;
   }
 
+  // "Play these": the scenes the current filters show, in the order shown
+  // (or shuffled), become the play queue. The worker opens the first in a
+  // new tab; the lineup hotkeys step through the rest there.
+  function shuffled(items) {
+    const pool = items.slice();
+    for (let index = pool.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [pool[index], pool[swap]] = [pool[swap], pool[index]];
+    }
+    return pool;
+  }
+
+  async function playFilteredScenes() {
+    const { MAX_PLAY_QUEUE, MESSAGE_TYPES, DEFAULT_SETTINGS } = SceneMarks.Constants;
+    const all = getFilteredVideos().flatMap((video) => video.scenes.map((scene) => ({
+      videoKey: video.videoKey,
+      sceneId: scene.id,
+      startSeconds: scene.startSeconds,
+      endSeconds: scene.endSeconds
+    })));
+    if (!all.length) {
+      elements.summaryBox.textContent = "No scenes to play under the current filters.";
+      return;
+    }
+    const items = (elements.playQueueShuffle.checked ? shuffled(all) : all).slice(0, MAX_PLAY_QUEUE);
+
+    elements.playQueueButton.disabled = true;
+    let response = null;
+    try {
+      response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.PLAY_QUEUE_START, payload: { items } });
+    } catch (_error) {
+      // Fall through to the shared error handling below.
+    } finally {
+      elements.playQueueButton.disabled = false;
+    }
+    if (!response || !response.ok) {
+      elements.summaryBox.textContent = (response && response.error) || "Playing these scenes is unavailable right now.";
+      return;
+    }
+
+    const hotkeys = (state && state.settings && state.settings.hotkeys) || DEFAULT_SETTINGS.hotkeys;
+    const capped = all.length > items.length ? ` (the first ${items.length} of ${all.length})` : "";
+    elements.summaryBox.textContent = `Playing ${response.count} ${response.count === 1 ? "scene" : "scenes"}`
+      + ` from ${response.videoCount} ${response.videoCount === 1 ? "video" : "videos"}${capped} in a new tab.`
+      + ` In that tab, ${hotkeys.lineupNext} plays the next scene and ${hotkeys.lineupPrevious} the previous one.`;
+  }
+
   function handleLibraryKeydown(event) {
     if (elements.confirmDialog.open) {
       return;
@@ -716,6 +763,8 @@
       "searchInput",
       "platformFilter",
       "favoritesOnly",
+      "playQueueButton",
+      "playQueueShuffle",
       "randomVideoButton",
       "randomOpenCount",
       "openRandomVideosButton",
@@ -743,6 +792,7 @@
     });
     elements.platformFilter.addEventListener("change", render);
     elements.favoritesOnly.addEventListener("change", render);
+    elements.playQueueButton.addEventListener("click", playFilteredScenes);
     elements.randomVideoButton.addEventListener("click", pickRandomVideo);
     elements.openRandomVideosButton.addEventListener("click", openRandomVideos);
     elements.randomOpenCount.addEventListener("keydown", (event) => {

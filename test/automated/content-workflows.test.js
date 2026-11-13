@@ -592,3 +592,21 @@ test("the favorite hotkey saves a favorite, or favorites the saved time already 
   assert.equal(toastText(work), "Already a favorite: 02:10");
   assert.doesNotMatch(pageText(work), /confidential/);
 });
+
+test("a play-queue step in place toasts its position, and a landed queue jump shows counts only", async () => {
+  const work = loadContent();
+  await flush();
+  const real = work.context.chrome.runtime.sendMessage;
+  work.context.chrome.runtime.sendMessage = (message, callback) => (/LINEUP/.test(message.type)
+    ? Promise.resolve({ ok: true, message: "Scene 2 of 10" })
+    : real(message, callback));
+  await work.events.emit("keydown", keyboard("KeyK"));
+  assert.equal(toastText(work), "Scene 2 of 10");
+
+  const shown = await work.send({ type: "SCENEMARKS_PLAY_QUEUE_STATUS", payload: { position: 3, total: 10 } });
+  assert.equal(shown.ok, true);
+  assert.equal(toastText(work), "Scene 3 of 10");
+  const bad = await work.send({ type: "SCENEMARKS_PLAY_QUEUE_STATUS", payload: { position: "<b>x</b>", total: 10 } });
+  assert.equal(bad.ok, false);
+  assert.equal(toastText(work), "Scene 3 of 10");
+});

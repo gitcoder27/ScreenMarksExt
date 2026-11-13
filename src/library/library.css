@@ -495,3 +495,13 @@ select {
     flex-direction: column;
   }
 }
+
+.shuffle-toggle {
+  align-items: center;
+  color: #cbd5e1;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 6px;
+}

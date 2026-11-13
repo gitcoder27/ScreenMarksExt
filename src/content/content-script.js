@@ -713,6 +713,20 @@
     return { ok: Boolean(result.ok), message: result.ok ? result.message : undefined, error: result.ok ? undefined : result.error };
   }
 
+  // The play queue landed on another video: "Scene 3 of 10". Built here
+  // from the two counts, so the page sees nothing else.
+  function showPlayQueueStatus(payload) {
+    const position = Number(payload.position);
+    const total = Number(payload.total);
+    if (!Number.isSafeInteger(position) || !Number.isSafeInteger(total) || position < 1 || total < position) {
+      return { ok: false, error: "Invalid queue position." };
+    }
+    if (overlay && isActiveHere()) {
+      overlay.showToast(`Scene ${position} of ${total}`, "success");
+    }
+    return { ok: true };
+  }
+
   // With "listen only while a video tab is active" on, tell the worker
   // when this visible tab's video appears or goes away, so the mic can
   // open as soon as a player loads. Only changes are sent.
@@ -783,6 +797,8 @@
         return updateScene(message.payload || {});
       case MESSAGE_TYPES.VOICE_ACTION:
         return runVoiceAction(message.payload || {});
+      case MESSAGE_TYPES.PLAY_QUEUE_STATUS:
+        return showPlayQueueStatus(message.payload || {});
       default:
         return { ok: false, error: "Unknown SceneMarks message." };
     }
@@ -870,9 +886,14 @@
       type: direction > 0 ? MESSAGE_TYPES.LINEUP_NEXT : MESSAGE_TYPES.LINEUP_PREVIOUS
     });
 
-    return response && response.ok
-      ? { ok: true, quiet: true }
-      : { ok: false, error: (response && response.error) || "Could not switch videos." };
+    // A play-queue step in place answers with its position ("Scene 3 of
+    // 10"), fixed text and counts only.
+    if (response && response.ok) {
+      return typeof response.message === "string" && response.message
+        ? { ok: true, message: response.message.slice(0, 120) }
+        : { ok: true, quiet: true };
+    }
+    return { ok: false, error: (response && response.error) || "Could not switch videos." };
   }
 
   async function toggleOverlayVisibility() {

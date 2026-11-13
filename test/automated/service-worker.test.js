@@ -166,7 +166,8 @@ function loadWorker(seedEntries, options) {
         setImmediate(() => callback(reply));
       },
       onUpdated: event("tabs.onUpdated"),
-      onActivated: event("tabs.onActivated")
+      onActivated: event("tabs.onActivated"),
+      onRemoved: event("tabs.onRemoved")
     },
     storage: {
       local: store.local,
@@ -1154,4 +1155,190 @@ test("turning backup on backs up soon", async () => {
   await settle();
   assert.equal(work.downloadLog.length, 1);
   assert.equal(after.backup.intervalHours, 24);
+});
+
+// ---- Play queue -------------------------------------------------------
+function queueLibrary() {
+  return videoEntries({
+    a: videoEntry("vidAAAAAAA1", [{ id: "a1", startSeconds: 10 }, { id: "a2", startSeconds: 50, favorite: true }]),
+    b: videoEntry("vidBBBBBBB2", [{ id: "b1", startSeconds: 70 }])
+  });
+}
+
+const QUEUE_ITEMS = [
+  { videoKey: "youtube:vidAAAAAAA1", sceneId: "a1", startSeconds: 10, endSeconds: null },
+  { videoKey: "youtube:vidAAAAAAA1", sceneId: "a2", startSeconds: 50, endSeconds: null },
+  { videoKey: "youtube:vidBBBBBBB2", sceneId: "b1", startSeconds: 70, endSeconds: null }
+];
+
+// The queue tab (1001) answers GET_CONTEXT with whatever video `showing`
+// holds, and seeks succeed.
+async function queueBrowser() {
+  const tabs = [];
+  const showing = { videoKey: null };
+  const work = loadWorker(queueLibrary(), {
+    tabs,
+    tabReply: (tabId, message) => (message.type === "SCENEMARKS_GET_VIDEO_CONTEXT"
+      ? { ok: true, context: { detected: Boolean(showing.videoKey), videoKey: showing.videoKey } }
+      : { ok: true })
+  });
+  await settle();
+  // What the jump slot held when each navigation started.
+  const navigations = [];
+  const update = work.context.chrome.tabs.update;
+  work.context.chrome.tabs.update = async (id, options) => {
+    if (options.url) navigations.push({ id, url: options.url, pendingJump: work.store.raw("pendingJump") });
+    return update(id, options);
+  };
+  return { work, tabs, showing, navigations };
+}
+
+function queueTab(id = 1001) {
+  return { tab: { id, active: true, windowId: 1, url: "https://www.youtube.com/watch?v=vidAAAAAAA1" }, frameId: 0,
+    url: "https://www.youtube.com/watch?v=vidAAAAAAA1" };
+}
+
+function consumeJump(work) {
+  const before = work.store.raw("pendingJump");
+  return new Promise((resolve) => work.store.local.set({ pendingJump: null }, resolve)).then(() => {
+    work.listeners["storage.onChanged"].forEach((listener) => listener({ pendingJump: { oldValue: before, newValue: null } }, "local"));
+    return settle();
+  });
+}
+
+function queueStatuses(work) {
+  return work.tabMessages.filter(({ message }) => message.type === "SCENEMARKS_PLAY_QUEUE_STATUS")
+    .map(({ tabId, message }) => ({ tabId, ...message.payload }));
+}
+
+test("a play queue starts only from the Library page", async () => {
+  const { work } = await queueBrowser();
+  for (const sender of [
+    {},
+    { url: "https://example.com/", tab: { id: 5, active: true }, frameId: 0 },
+    { url: "chrome-extension://scenemarks/src/popup/popup.html" },
+    { url: "chrome-extension://scenemarks/src/options/options.html" },
+    { url: "chrome-extension://other/src/library/library.html" }
+  ]) {
+    const response = await sendToWorker(work.listeners, { type: "SCENEMARKS_PLAY_QUEUE_START", payload: { items: QUEUE_ITEMS } }, sender);
+    assert.equal(response.ok, false);
+  }
+  assert.equal(work.openedTabs.length, 0);
+  assert.equal(work.session.playQueue, undefined);
+});
+
+test("starting a queue opens the first scene in one new tab through a jump published before navigation", async () => {
+  const { work, navigations } = await queueBrowser();
+  const response = await sendToWorker(work.listeners, {
+    type: "SCENEMARKS_PLAY_QUEUE_START",
+    payload: { items: [...QUEUE_ITEMS, { videoKey: "youtube:vidAAAAAAA1", sceneId: "deleted" }, { videoKey: 7 }] }
+  }, LIBRARY_PAGE);
+  assert.equal(response.ok, true);
+  assert.equal(response.count, 3);
+  assert.equal(response.videoCount, 2);
+  assert.deepEqual(work.openedTabs.map((tab) => tab.url), ["about:blank"]);
+  assert.equal(navigations.length, 1);
+  assert.equal(navigations[0].id, 1001);
+  assert.equal(navigations[0].pendingJump.targetTabId, 1001);
+  assert.equal(navigations[0].pendingJump.sceneId, "a1");
+  assert.equal(navigations[0].pendingJump.seconds, 10);
+  const queue = work.session.playQueue;
+  assert.equal(queue.tabId, 1001);
+  assert.equal(queue.index, 0);
+  assert.deepEqual([...queue.items.map((item) => item.sceneId)], ["a1", "a2", "b1"]);
+  // The page consumed the jump: it is told its position, counts only.
+  await consumeJump(work);
+  assert.deepEqual(queueStatuses(work), [{ tabId: 1001, position: 1, total: 3 }]);
+});
+
+test("a queue holds at most 200 scenes", async () => {
+  const scenes = Array.from({ length: 250 }, (_, index) => ({ id: `s${index}`, startSeconds: index * 10 }));
+  const work = loadWorker(videoEntries({ a: videoEntry("vidAAAAAAA1", scenes) }), { tabs: [] });
+  await settle();
+  const items = scenes.map((scene) => ({ videoKey: "youtube:vidAAAAAAA1", sceneId: scene.id }));
+  const response = await sendToWorker(work.listeners, { type: "SCENEMARKS_PLAY_QUEUE_START", payload: { items } }, LIBRARY_PAGE);
+  assert.equal(response.count, 200);
+  assert.equal(work.session.playQueue.items.length, 200);
+});
+
+test("the lineup hotkeys step the queue: in place for the same video, through an owned jump for another", async () => {
+  const { work, showing, navigations } = await queueBrowser();
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_PLAY_QUEUE_START", payload: { items: QUEUE_ITEMS } }, LIBRARY_PAGE);
+  await consumeJump(work);
+  showing.videoKey = "youtube:vidAAAAAAA1";
+
+  // Same video: a seek in the tab, no navigation, and the position.
+  const second = await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_NEXT" }, queueTab());
+  assert.deepEqual({ ...second }, { ok: true, message: "Scene 2 of 3" });
+  const seek = work.tabMessages.filter(({ message }) => message.type === "SCENEMARKS_SEEK_TO").at(-1);
+  assert.deepEqual({ tabId: seek.tabId, ...seek.message.payload },
+    { tabId: 1001, seconds: 50, behavior: "play-after-jump", expectedVideoKey: "youtube:vidAAAAAAA1" });
+  assert.equal(navigations.length, 1);
+
+  // Another video: the same tab navigates, with the jump already published
+  // for it.
+  const third = await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_NEXT" }, queueTab());
+  assert.equal(third.ok, true);
+  assert.equal(navigations.length, 2);
+  assert.equal(navigations[1].id, 1001);
+  assert.equal(navigations[1].url, "https://www.youtube.com/watch?v=vidBBBBBBB2");
+  assert.equal(navigations[1].pendingJump.targetTabId, 1001);
+  assert.equal(navigations[1].pendingJump.sceneId, "b1");
+  assert.equal(work.openedTabs.length, 1);
+
+  // Until that jump is consumed, the next step waits.
+  const busy = await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_PREVIOUS" }, queueTab());
+  assert.equal(busy.ok, false);
+  assert.match(busy.error, /Still opening/);
+  assert.equal(work.session.playQueue.index, 2);
+  await consumeJump(work);
+  assert.deepEqual(queueStatuses(work).at(-1), { tabId: 1001, position: 3, total: 3 });
+  showing.videoKey = "youtube:vidBBBBBBB2";
+
+  // Past the last scene the queue ends; the keys go back to the lineup.
+  const end = await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_NEXT" }, queueTab());
+  assert.deepEqual({ ...end }, { ok: true, message: "End of the queue (3 scenes)" });
+  assert.equal(work.session.playQueue, null);
+  const after = await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_NEXT" }, queueTab());
+  assert.match(after.error, /No lineup/);
+});
+
+test("the queue does not step back before its first scene", async () => {
+  const { work } = await queueBrowser();
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_PLAY_QUEUE_START", payload: { items: QUEUE_ITEMS } }, LIBRARY_PAGE);
+  await consumeJump(work);
+  const response = await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_PREVIOUS" }, queueTab());
+  assert.equal(response.ok, false);
+  assert.match(response.error, /first scene/);
+  assert.equal(work.session.playQueue.index, 0);
+});
+
+test("the queue steps only from its own tab, under the lineup hotkeys' checks", async () => {
+  const { work, navigations } = await queueBrowser();
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_PLAY_QUEUE_START", payload: { items: QUEUE_ITEMS } }, LIBRARY_PAGE);
+  await consumeJump(work);
+  for (const sender of [
+    { url: "chrome-extension://scenemarks/src/library/library.html", tab: { id: 1001, active: true }, frameId: 0 },
+    { ...queueTab(), tab: { ...queueTab().tab, active: false } },
+    { ...queueTab(), frameId: 2 }
+  ]) {
+    const response = await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_NEXT" }, sender);
+    assert.equal(response.ok, false);
+  }
+  // Another tab gets the lineup, not the queue.
+  const other = await sendToWorker(work.listeners, { type: "SCENEMARKS_LINEUP_NEXT" }, queueTab(21));
+  assert.match(other.error, /No lineup/);
+  assert.equal(work.session.playQueue.index, 0);
+  assert.equal(navigations.length, 1);
+});
+
+test("closing the queue's tab ends the queue", async () => {
+  const { work } = await queueBrowser();
+  await sendToWorker(work.listeners, { type: "SCENEMARKS_PLAY_QUEUE_START", payload: { items: QUEUE_ITEMS } }, LIBRARY_PAGE);
+  work.listeners["tabs.onRemoved"].forEach((listener) => listener(77, {}));
+  await settle();
+  assert.equal(work.session.playQueue.tabId, 1001);
+  work.listeners["tabs.onRemoved"].forEach((listener) => listener(1001, {}));
+  await settle();
+  assert.equal(work.session.playQueue, null);
 });

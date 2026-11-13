@@ -46,6 +46,8 @@
     "SceneMarks/scenemarks-backup-2.json"
   ]);
   const BACKUP_INTERVAL_CHOICES = Object.freeze([6, 12, 24, 72, 168]);
+  // The play queue (Library "Play these") holds at most this many scenes.
+  const MAX_PLAY_QUEUE = 200;
 
   const DEFAULT_SETTINGS = Object.freeze({
     // false pauses SceneMarks on every site; disabledSites lists the
@@ -140,7 +142,13 @@
     // video played lately?
     VOICE_IDLE_CHECK: "SCENEMARKS_VOICE_IDLE_CHECK",
     // Options page -> worker: back up the library now. Extension pages only.
-    BACKUP_NOW: "SCENEMARKS_BACKUP_NOW"
+    BACKUP_NOW: "SCENEMARKS_BACKUP_NOW",
+    // Library page -> worker: play these scenes one after another in one
+    // tab (the play queue). Accepted only from the Library page.
+    PLAY_QUEUE_START: "SCENEMARKS_PLAY_QUEUE_START",
+    // Worker -> content script: the queue landed on scene `position` of
+    // `total` (counts only; the toast is built in the page).
+    PLAY_QUEUE_STATUS: "SCENEMARKS_PLAY_QUEUE_STATUS"
   });
 
   // The spoken commands, in training-screen order. The user records their
@@ -187,6 +195,7 @@
     LEGACY_STORAGE_KEY,
     MAX_DISABLED_SITES,
     MAX_NOTE_LENGTH,
+    MAX_PLAY_QUEUE,
     MAX_RAW_URLS,
     MAX_TAG_LENGTH,
     MAX_TAGS,

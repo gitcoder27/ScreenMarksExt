@@ -237,7 +237,10 @@ async function openVideoUrl(rawUrl) {
   }
 }
 
-async function openVideoAtScene(payload) {
+// onPublished(tab, pendingJump), when given, runs after the jump is
+// published and before the tab navigates (the play queue records its
+// request there, before the page can consume it).
+async function openVideoAtScene(payload, onPublished) {
   const { Storage, Schema } = SceneMarks;
   // Validate before allocating a tab. The placeholder is not published.
   const target = Schema.normalizePendingJump({
@@ -255,6 +258,7 @@ async function openVideoAtScene(payload) {
     const queued = await Storage.setPendingJump({ ...target, targetTabId: tab.id });
     if (!queued.ok) throw new Error(queued.error);
     requestId = queued.pendingJump.requestId;
+    if (onPublished) await onPublished(tab, queued.pendingJump);
     await chrome.tabs.update(tab.id, { url: target.url });
     return { ok: true, tabId: tab.id };
   } catch (error) {
@@ -276,8 +280,8 @@ async function openVideoAtScene(payload) {
 // Keep publication in click order even if creating the first tab is slow.
 // Storage itself still uses its single writer queue for every mutation.
 let sceneOpenQueue = Promise.resolve();
-function queueVideoAtScene(payload) {
-  const opening = sceneOpenQueue.then(() => openVideoAtScene(payload));
+function queueVideoAtScene(payload, onPublished) {
+  const opening = sceneOpenQueue.then(() => openVideoAtScene(payload, onPublished));
   sceneOpenQueue = opening.then(() => {}, () => {});
   return opening;
 }
@@ -1022,6 +1026,212 @@ async function toggleVoiceFromShortcut() {
 }
 
 // ---------------------------------------------------------------------
+// The play queue: the Library's "Play these" plays the filtered scenes one
+// after another in one tab. The queue and its position live in
+// chrome.storage.session (memory only, capped at MAX_PLAY_QUEUE scenes).
+// The lineup hotkeys step it while pressed in the queue's tab: a scene of
+// the video already playing is a seek in place; another video navigates
+// the same tab through an owned queued jump (targetTabId = the queue's
+// tab, never inferred). Closing the tab ends the queue.
+const PLAY_QUEUE_KEY = "playQueue";
+// The queued-jump slot holds one request. A step waits until the last one
+// was consumed, or until it is this old (a page that never seeks).
+const PLAY_QUEUE_BUSY_MS = 15000;
+let playQueueWork = Promise.resolve();
+
+function serialPlayQueue(task) {
+  const run = playQueueWork.then(task);
+  playQueueWork = run.catch(() => {});
+  return run;
+}
+
+async function getPlayQueue() {
+  const session = chrome.storage.session;
+  if (!session) return null;
+  const queue = (await session.get(PLAY_QUEUE_KEY))[PLAY_QUEUE_KEY];
+  if (!queue || !Number.isSafeInteger(queue.tabId) || !Array.isArray(queue.items) || !queue.items.length
+    || !Number.isSafeInteger(queue.index) || queue.index < 0 || queue.index >= queue.items.length
+    || !queue.urls || typeof queue.urls !== "object") {
+    return null;
+  }
+  return queue;
+}
+
+async function savePlayQueue(queue) {
+  if (chrome.storage.session) {
+    await chrome.storage.session.set({ [PLAY_QUEUE_KEY]: queue });
+  }
+}
+
+function playQueuePosition(queue) {
+  return { position: queue.index + 1, total: queue.items.length };
+}
+
+function playQueueLabel(queue) {
+  return `Scene ${queue.index + 1} of ${queue.items.length}`;
+}
+
+// Starts a queue from the Library's filtered scenes. Scenes are looked up
+// again in storage (a scoped read of their videos); ones deleted since, or
+// whose video has no openable URL, are left out.
+async function startPlayQueue(payload) {
+  const { Storage, Constants } = SceneMarks;
+  const requested = payload && Array.isArray(payload.items) ? payload.items.slice(0, Constants.MAX_PLAY_QUEUE) : [];
+  const videoKeys = [...new Set(requested
+    .map((item) => (item && typeof item.videoKey === "string" ? item.videoKey : null))
+    .filter(Boolean))];
+  const state = videoKeys.length ? await Storage.getState({ videoKeys }) : { videos: {} };
+  const items = [];
+  const urls = {};
+  for (const item of requested) {
+    const video = item && state.videos[item.videoKey];
+    const scene = video && video.scenes.find((candidate) => candidate.id === item.sceneId);
+    const url = video && (video.canonicalUrl || video.rawUrls[0]);
+    if (!scene || !url) continue;
+    urls[video.videoKey] = url;
+    items.push({ videoKey: video.videoKey, sceneId: scene.id, seconds: scene.startSeconds, endSeconds: scene.endSeconds });
+  }
+  if (!items.length) {
+    return { ok: false, error: "No scenes to play under the current filters." };
+  }
+
+  return serialPlayQueue(async () => {
+    const first = items[0];
+    let queueTabId = null;
+    const result = await queueVideoAtScene(
+      { url: urls[first.videoKey], videoKey: first.videoKey, sceneId: first.sceneId, seconds: first.seconds },
+      (tab, pendingJump) => {
+        queueTabId = tab.id;
+        return savePlayQueue({ tabId: tab.id, index: 0, items, urls, awaitingRequestId: pendingJump.requestId });
+      }
+    );
+    if (!result.ok) {
+      // The new tab was closed again; forget a queue recorded for it.
+      const saved = await getPlayQueue();
+      if (saved && saved.tabId === queueTabId) await savePlayQueue(null);
+      return result;
+    }
+    return { ok: true, count: items.length, videoCount: Object.keys(urls).length, tabId: result.tabId };
+  });
+}
+
+async function jumpSlotBusy() {
+  const { pendingJump } = await SceneMarks.Storage.getState({ videoKeys: [] });
+  return Boolean(pendingJump) && Date.now() - Date.parse(pendingJump.createdAt) < PLAY_QUEUE_BUSY_MS;
+}
+
+// The video the queue's tab shows now, or null when it cannot say.
+async function tabVideoKey(tabId) {
+  try {
+    const response = await sendTabMessage(tabId, { type: SceneMarks.Constants.MESSAGE_TYPES.GET_CONTEXT });
+    return response && response.ok && response.context && response.context.detected ? response.context.videoKey : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// One step from the queue's own tab. Past the last scene the queue ends;
+// before the first it stays. Messages are fixed text and counts.
+async function stepPlayQueue(direction, tabId) {
+  const queue = await getPlayQueue();
+  if (!queue || queue.tabId !== tabId) {
+    return null;
+  }
+  const target = queue.index + direction;
+  if (target < 0) {
+    return { ok: false, error: "This is the first scene in the queue" };
+  }
+  if (target >= queue.items.length) {
+    await savePlayQueue(null);
+    return { ok: true, message: `End of the queue (${queue.items.length} scenes)` };
+  }
+  if (await jumpSlotBusy()) {
+    return { ok: false, error: "Still opening the last scene \u2014 try again in a moment" };
+  }
+
+  const item = queue.items[target];
+  const next = { ...queue, index: target, awaitingRequestId: null };
+  if (await tabVideoKey(tabId) === item.videoKey) {
+    let seek = null;
+    try {
+      seek = await sendTabMessage(tabId, {
+        type: SceneMarks.Constants.MESSAGE_TYPES.SEEK_TO,
+        payload: { seconds: item.seconds, behavior: "play-after-jump", expectedVideoKey: item.videoKey }
+      });
+    } catch (error) {
+      seek = { ok: false, error: error.message };
+    }
+    if (!seek || !seek.ok) {
+      return { ok: false, error: (seek && seek.error) || "Could not jump to the next scene." };
+    }
+    await savePlayQueue(next);
+    return { ok: true, message: playQueueLabel(next) };
+  }
+
+  const url = queue.urls[item.videoKey];
+  const queued = await SceneMarks.Storage.setPendingJump({
+    url, videoKey: item.videoKey, sceneId: item.sceneId, seconds: item.seconds, targetTabId: tabId
+  });
+  if (!queued.ok) {
+    return queued;
+  }
+  await savePlayQueue({ ...next, awaitingRequestId: queued.pendingJump.requestId });
+  try {
+    await chrome.tabs.update(tabId, { url });
+  } catch (error) {
+    await SceneMarks.Storage.clearPendingJump(queued.pendingJump.requestId).catch(() => {});
+    await savePlayQueue(queue);
+    return { ok: false, error: "Could not open the next video." };
+  }
+  // The page goes away; the landed page shows where it is.
+  return { ok: true, quiet: true };
+}
+
+// The lineup hotkeys: the play queue when pressed in its tab, else the
+// lineup.
+async function stepQueueOrLineup(direction, senderTab) {
+  const stepped = await serialPlayQueue(() => stepPlayQueue(direction, senderTab.id));
+  return stepped || stepLineup(direction, senderTab);
+}
+
+// The queue's jump to another video was consumed: say where it landed.
+function notePlayQueueJumpDone(requestId, replaced) {
+  return serialPlayQueue(async () => {
+    const queue = await getPlayQueue();
+    if (!queue || !queue.awaitingRequestId || queue.awaitingRequestId !== requestId) return;
+    await savePlayQueue({ ...queue, awaitingRequestId: null });
+    if (replaced) return;
+    await sendTabMessage(queue.tabId, {
+      type: SceneMarks.Constants.MESSAGE_TYPES.PLAY_QUEUE_STATUS,
+      payload: playQueuePosition(queue)
+    }).catch(() => {});
+  });
+}
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  const change = areaName === "local" && changes[SceneMarks.Constants.STORAGE_KEYS.PENDING_JUMP];
+  const old = change && change.oldValue;
+  if (!old || !old.requestId || (change.newValue && change.newValue.requestId === old.requestId)) {
+    return;
+  }
+  notePlayQueueJumpDone(old.requestId, Boolean(change.newValue)).catch(() => {});
+});
+
+if (chrome.tabs.onRemoved) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    serialPlayQueue(async () => {
+      const queue = await getPlayQueue();
+      if (queue && queue.tabId === tabId) await savePlayQueue(null);
+    }).catch(() => {});
+  });
+}
+
+function isLibraryPageSender(sender) {
+  return Boolean(sender && typeof sender.url === "string"
+    && sender.url.split(/[?#]/)[0] === chrome.runtime.getURL("src/library/library.html"));
+}
+
+// ---------------------------------------------------------------------
 // Automatic local backup. Exactly two fixed files in the downloads folder,
 // SceneMarks/scenemarks-backup-1.json and -2.json, written alternately with
 // conflictAction "overwrite": the folder never holds a third file, and the
@@ -1288,7 +1498,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     const direction = message.type === SceneMarks.Constants.MESSAGE_TYPES.LINEUP_NEXT ? 1 : -1;
-    return respondWith(stepLineup(direction, sender.tab), sendResponse);
+    return respondWith(stepQueueOrLineup(direction, sender.tab), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.OPEN_RANDOM_VIDEOS) {
@@ -1344,6 +1554,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     return respondWith(handleVoiceCommand(message.payload), sendResponse);
+  }
+
+  if (message.type === SceneMarks.Constants.MESSAGE_TYPES.PLAY_QUEUE_START) {
+    // Only the Library page may make the worker open and drive a tab.
+    if (!isLibraryPageSender(sender)) {
+      sendResponse({ ok: false, error: "Only the SceneMarks Library may start a play queue." });
+      return false;
+    }
+    return respondWith(startPlayQueue(message.payload), sendResponse);
   }
 
   if (message.type === SceneMarks.Constants.MESSAGE_TYPES.BACKUP_NOW) {

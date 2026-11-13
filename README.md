@@ -20,6 +20,7 @@ It stores saved scenes locally in `chrome.storage.local` (see [Data Storage](#da
 - Favorites at both levels: star entire videos or individual timestamps in the Library and popup, or press `Alt+Shift+F` to save the current moment as a favorite. The Library favorites filter includes any video that is favorited itself or has a favorited timestamp.
 - Random video shortcut that opens a random saved video at its first saved timestamp, skipping videos already open in tabs of the current window.
 - A lineup of the videos the Library's batch **Open Random** opened: each starts at its first saved timestamp the first time you look at it, and `Alt+Shift+K` / `Alt+Shift+J` step to the next or previous one.
+- A [play queue](#play-queue): **Play These** in the Library plays the scenes the current filters show (for example **Favorites**), one after another in one tab, stepped with `Alt+Shift+K` / `Alt+Shift+J`.
 - [Automatic local backup](#automatic-backup) to two fixed files in the downloads folder, alternating, written only when the library changed.
 - Hands-free [voice commands](#voice-commands) (next, back, pause, play, mark, skip, return, random), recognized locally against your own recorded words, with no AI model and no network.
 - Permissions: `storage`, `unlimitedStorage`, `activeTab`, `scripting`, `tabs`, `offscreen`, `downloads` and `alarms`, plus an `<all_urls>` host permission so content scripts (video detection, overlay, queued jumps) run on every page without popup activation. `unlimitedStorage` lifts the 10 MB `chrome.storage.local` cap; Chrome shows no permission warning for it. `offscreen` lets the voice listener run in a hidden extension page, so the microphone permission belongs to SceneMarks rather than to the video sites. `downloads` and `alarms` are for [automatic backup](#automatic-backup): an hourly check, and saving the backup file.
@@ -82,14 +83,18 @@ Default page hotkeys:
 - `Alt+Shift+R`: open a random video from the library at its first saved timestamp (only videos with at least one saved timestamp are picked). Videos already open in a tab of the current window are never picked, so repeated jumps keep surfacing videos you have not opened yet. Open-tab matching uses service adapter identities (including YouTube watch/shorts/short-link variants). Generic matching preserves case-sensitive paths, content query parameters and fragments while removing known tracking parameters. Library Random controls use the same matching.
 - `Alt+Shift+O`: show or hide the overlay panel.
 - `Alt+Shift+L`: open library.
-- `Alt+Shift+K`: next video in the [lineup](#the-lineup), at its first saved timestamp.
-- `Alt+Shift+J`: previous video in the lineup, at its first saved timestamp.
+- `Alt+Shift+K`: next video in the [lineup](#the-lineup), at its first saved timestamp. In the tab of a [play queue](#play-queue), the next scene of the queue.
+- `Alt+Shift+J`: previous video in the lineup, at its first saved timestamp. In a play queue's tab, the previous scene.
 
 To customize page hotkeys, open SceneMarks popup, click **Settings**, then use the recorder fields in Settings. Single-key shortcuts are supported: click **Record** and press one key, for example just `S`, with no modifier. Press `Escape` while recording to cancel. Page hotkeys are ignored while you type in text fields.
 
 Page hotkeys are registered at `document_start`, synchronously before waiting for settings. Shortcuts pass through while settings load; accepted matches stop propagation before running an action. Saved settings reach open tabs immediately. Reload video tabs after updating extension code. Numpad keys keep their own physical-key identity, separately from main-keyboard digits and Enter.
 
 To customize browser command shortcuts, open `brave://extensions/shortcuts` or `chrome://extensions/shortcuts`.
+
+### Play queue
+
+In the Library, filter the scenes you want (for example tick **Favorites**), then click **Play These**. Tick **Shuffle** first to play them in random order; otherwise they play in the order the Library shows them. At most 200 scenes go into one queue. SceneMarks opens the first scene in a new tab; go fullscreen there and press `Alt+Shift+K` for the next scene and `Alt+Shift+J` for the previous one. A scene of the video already playing is a seek in place; a scene of another video loads in the same tab and seeks once the player is ready. The page shows only `Scene 3 of 10`. While another video is still loading, a further step waits (the toast says so) for up to 15 seconds. Stepping past the last scene ends the queue; closing its tab ends it too, and a new **Play These** replaces it. Elsewhere the two keys keep stepping the lineup. The queue lives in `chrome.storage.session` (memory only).
 
 ## Voice Commands
 
@@ -243,7 +248,8 @@ Do this first on a normal HTML5 video before trying streaming sites:
 9. Use overlay **Quick Save**, **Mark range start/end** and **Open Library**. Confirm the overlay lists every saved time of the current video, updates when you save or delete one, and jumps when clicked, while notes and titles appear only in the popup/Library. Try popup capture while playback continues, customized single-key/numpad shortcuts, and independent Settings changes from two extension pages.
 10. Serve the test page over `http://localhost` (for example `python3 -m http.server`) and press **Turn off here** in the popup. Confirm that the overlay disappears, page hotkeys do nothing, and the toolbar badge reads **OFF**. Then open a scene from the Library and confirm the jump still lands. Press **Turn on here** and confirm everything comes back without a reload. Repeat with **Pause everywhere** / **Resume**, which also covers `file://` pages.
 11. In Settings → Data, click **Back Up Now** three times with a saved time added between each, and confirm `Downloads/SceneMarks/` holds exactly `scenemarks-backup-1.json` and `scenemarks-backup-2.json`, with no `(1)` copies. Click it again without a change and confirm it says nothing changed. Import the newer file into a fresh profile and confirm every video and scene is back.
-12. With voice off, batch **Open Random** 3 videos in the Library, click the first one's tab and confirm it starts at its first saved timestamp, then press `Alt+Shift+K` / `Alt+Shift+J` to move between them. Press `Alt+Shift+R` and confirm the new video opens at its first saved timestamp.
+12. Filter the Library to **Favorites** with favorites in three videos, click **Play These**, go fullscreen, and step through ten scenes with `Alt+Shift+K` / `Alt+Shift+J` without returning to the Library. Each step shows `Scene n of N`. Close the tab and confirm the keys step the lineup again.
+13. With voice off, batch **Open Random** 3 videos in the Library, click the first one's tab and confirm it starts at its first saved timestamp, then press `Alt+Shift+K` / `Alt+Shift+J` to move between them. Press `Alt+Shift+R` and confirm the new video opens at its first saved timestamp.
 
 Voice commands (headphones recommended):
 
